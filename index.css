@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+html, body {
+  min-height: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: 'Rubik', 'Helvetica';
+  color: white;
+  font-size: medium;
+  position: relative;
+}
+
+
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: none;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield !important;
+  appearance: none !important;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: none;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  opacity: 1;
+  cursor: pointer;
+}
+
+/* Hide the text (date value) */
+input[type="date"]::-webkit-datetime-edit,
+input[type="date"]::-webkit-datetime-edit-fields-wrapper,
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field {
+  display: none;
+}
+
+/* Firefox: hide text */
+input[type="date"]::-moz-datetime-edit {
+  display: none;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23000000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  width: 16px;
+  height: 16px;
+  opacity: 1;
+  cursor: pointer;
+}
+  
+
+*:focus {
+  outline: none;
+}
+
+@font-face {
+  font-family: Hedvig;
+  src: url('/src/assets/fonts/HedvigLettersSans-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+
+
+@font-face {
+  font-family: 'Rubik';
+  src: url('/src/assets/fonts/Rubik-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  unicode-range: U+0041-005A, U+0061-007A, U+0020-002F, U+003A-0040, U+005B-007A;
+}
+@font-face {
+  font-family: Helvetica;
+  src: url('/src/assets/fonts/HelveticaNeueMedium.otf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  unicode-range: U+0030-0039; /* Only digits 0–9 */
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #1e3a8a #000000; /* Dark blue thumb, black track */
+}
+
+/* WebKit-specific scrollbar styling */
+*::-webkit-scrollbar {
+  width: 12px; /* Width for vertical scrollbars */
+  height: 12px; /* Height for horizontal scrollbars */
+  padding: 0, 0, 0, 10;
+}
+
+*::-webkit-scrollbar-track {
+  background: #000000; /* Black track */
+  border-radius: 10px; /* Rounded corners for the track */
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #1e3a8a; /* Dark blue thumb */
+  border-radius: 10px; /* Rounded corners for the thumb */
+  border: 2px solid #000000; /* Black border to blend with track */
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6; /* Lighter blue on hover for interactivity */
+}
+
+*::-webkit-scrollbar-button {
+  display: none; /* Hide scrollbar buttons (arrows) */
+}
+
+*::-webkit-scrollbar-corner {
+  background: #000000; /* Black corner for consistency */
+}
+
+

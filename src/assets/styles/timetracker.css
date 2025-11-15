@@ -1,0 +1,67 @@
+main {
+  color: white;
+  font-size: medium;
+  background: radial-gradient(ellipse at bottom, #1B2735 0%, #090A0F 100%);
+  position: relative;
+  min-height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+main::before,
+main::after {
+  content: '';
+  position: absolute;
+  width: 300vw;
+  height: 300vh;
+  top: -100vh;
+  left: -100vw;
+  pointer-events: none;
+  z-index: 0;
+  background-repeat: repeat;
+}
+
+main::before {
+  background-image: 
+    radial-gradient(1px 1px at 10px 20px, white, transparent),
+    radial-gradient(1px 1px at 80px 90px, white, transparent),
+    radial-gradient(2px 2px at 150px 40px, white, transparent),
+    radial-gradient(1px 1px at 220px 160px, white, transparent),
+    radial-gradient(1px 1px at 35px 130px, white, transparent),
+    radial-gradient(2px 2px at 190px 10px, white, transparent),
+    radial-gradient(1px 1px at 120px 200px, white, transparent),
+    radial-gradient(1px 1px at 60px 170px, white, transparent);
+  background-size: 250px 250px;
+  animation: drift1 500s linear infinite;
+  opacity: 0.7;
+}
+
+main::after {
+  background-image: 
+    radial-gradient(1px 1px at 45px 65px, white, transparent),
+    radial-gradient(2px 2px at 130px 15px, white, transparent),
+    radial-gradient(1px 1px at 200px 110px, white, transparent),
+    radial-gradient(1px 1px at 25px 180px, white, transparent),
+    radial-gradient(1px 1px at 175px 75px, white, transparent),
+    radial-gradient(2px 2px at 95px 145px, white, transparent),
+    radial-gradient(1px 1px at 165px 205px, white, transparent),
+    radial-gradient(1px 1px at 50px 95px, white, transparent);
+  background-size: 280px 280px;
+  animation: drift2 500s linear infinite reverse;
+  opacity: 0.6;
+}
+
+main > * {
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes drift1 {
+  from { transform: translate(0, 0) rotate(0deg); }
+  to { transform: translate(-500px, -500px) rotate(360deg); }
+}
+
+@keyframes drift2 {
+  from { transform: translate(0, 0) rotate(0deg); }
+  to { transform: translate(400px, 600px) rotate(-360deg); }
+}
