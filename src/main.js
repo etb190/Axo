@@ -1,5 +1,6 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, dialog, nativeImage } from 'electron';
 import path from 'node:path';
+import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -14,10 +15,22 @@ const getIconPath = (name) => {
   const baseName = name.split('.')[0];
   const fileName = baseName + ext;
   
+  let iconPath;
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, fileName);
+    iconPath = path.join(process.resourcesPath, fileName);
+  } else {
+    iconPath = path.join(__dirname, '../../src/assets', fileName);
   }
-  return path.join(__dirname, '../../src/assets', fileName);
+  
+  if (!fs.existsSync(iconPath)) {
+    console.error('Icon not found at path:', iconPath);
+    // Fallback to PNG if ICO fails
+    if (ext === '.ico') {
+      const pngPath = iconPath.replace('.ico', '.png');
+      if (fs.existsSync(pngPath)) return pngPath;
+    }
+  }
+  return iconPath;
 };
 
 const createWindow = () => {
@@ -90,11 +103,19 @@ ipcMain.on('update-app-icon', (event, isActive) => {
   if (!mainWindow) return;
   const iconName = isActive ? 'icon_active.png' : 'icon.png';
   const iconPath = getIconPath(iconName);
-  console.log('Main process setting icon:', iconPath, 'isActive:', isActive);
+  
+  console.log('Attempting to set icon:', iconPath, 'isActive:', isActive);
+  
   try {
-    mainWindow.setIcon(iconPath);
+    const image = nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) {
+      console.error('Failed to create nativeImage from path:', iconPath);
+      return;
+    }
+    mainWindow.setIcon(image);
+    console.log('Icon set successfully');
   } catch (err) {
-    console.error('Failed to set icon:', err);
+    console.error('Error in setIcon:', err);
   }
 });
 
@@ -142,6 +163,3 @@ app.on('window-all-closed', () => {
     app.quit();
   }
 });
-
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and import them here.
