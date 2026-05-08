@@ -8,6 +8,8 @@ module.exports = {
     icon: path.join(__dirname, 'src/assets/icon'),
     extraResource: [
       path.join(__dirname, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
+      path.join(__dirname, 'src/assets/icon.png'),
+      path.join(__dirname, 'src/assets/icon_active.png'),
     ],
   },
   rebuildConfig: {},

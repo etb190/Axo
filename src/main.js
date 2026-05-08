@@ -9,12 +9,19 @@ if (started) {
 
 let mainWindow;
 
+const getIconPath = (name) => {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, name);
+  }
+  return path.join(__dirname, '../../src/assets', name);
+};
+
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
     width: 800,
     height: 600,
-    icon: path.join(__dirname, '../../src/assets/icon.png'),
+    icon: getIconPath('icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: true,
@@ -78,7 +85,7 @@ const createWindow = () => {
 ipcMain.on('update-app-icon', (event, isActive) => {
   if (!mainWindow) return;
   const iconName = isActive ? 'icon_active.png' : 'icon.png';
-  const iconPath = path.join(__dirname, '../../src/assets', iconName);
+  const iconPath = getIconPath(iconName);
   mainWindow.setIcon(iconPath);
 });
 
