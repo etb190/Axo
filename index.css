@@ -1,9 +1,36 @@
 @import "tailwindcss";
+@plugin "tailwindcss-animate";
+@plugin "@tailwindcss/typography";
 
-html, body {
+:root {
+  color-scheme: dark;
+  --bg-primary: #000000;
+  --bg-secondary: #050505;
+  --bg-tertiary: #0a0a0a;
+  --border-subtle: rgba(255, 255, 255, 0.03);
+  --border-strong: rgba(255, 255, 255, 0.08);
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --text-muted: #444444;
+  --accent-emerald: #10b981;
+  --accent-blue: #3b82f6;
+  --accent-purple: #8b5cf6;
+  --accent-rose: #f43f5e;
+  --glass-bg: rgba(0, 0, 0, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.05);
+  --planner-bg: transparent;
+  --planner-border: rgba(255, 255, 255, 0.05);
+  --planner-accent: #6366f1;
+  --planner-success: #10b981;
+  --planner-warning: #f59e0b;
+}
+
+html,
+body {
   min-height: 100%;
   margin: 0;
   overflow-x: hidden;
+  background-color: #000000;
 }
 
 body {
@@ -64,7 +91,7 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   opacity: 1;
   cursor: pointer;
 }
-  
+
 
 *:focus {
   outline: none;
@@ -86,47 +113,80 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   font-style: normal;
   unicode-range: U+0041-005A, U+0061-007A, U+0020-002F, U+003A-0040, U+005B-007A;
 }
+
 @font-face {
   font-family: Helvetica;
   src: url('/src/assets/fonts/HelveticaNeueMedium.otf') format('truetype');
   font-weight: normal;
   font-style: normal;
-  unicode-range: U+0030-0039; /* Only digits 0–9 */
+  unicode-range: U+0030-0039;
+  /* Only digits 0–9 */
 }
 
 * {
   scrollbar-width: thin;
-  scrollbar-color: #1e3a8a #000000; /* Dark blue thumb, black track */
+  scrollbar-color: #27272a #000000;
 }
 
-/* WebKit-specific scrollbar styling */
+/* WebKit-specific scrollbar styling - Pro-Black Compact */
 *::-webkit-scrollbar {
-  width: 12px; /* Width for vertical scrollbars */
-  height: 12px; /* Height for horizontal scrollbars */
-  padding: 0, 0, 0, 10;
+  width: 8px;
+  height: 8px;
 }
 
 *::-webkit-scrollbar-track {
-  background: #000000; /* Black track */
-  border-radius: 10px; /* Rounded corners for the track */
+  background: #000000;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: #1e3a8a; /* Dark blue thumb */
-  border-radius: 10px; /* Rounded corners for the thumb */
-  border: 2px solid #000000; /* Black border to blend with track */
+  background: #27272a;
+  border-radius: 20px;
+  border: 2px solid #000000;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: #3b82f6; /* Lighter blue on hover for interactivity */
+  background: #3f3f46;
 }
 
 *::-webkit-scrollbar-button {
-  display: none; /* Hide scrollbar buttons (arrows) */
+  display: none;
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: inherit;
+}
+
+/* Standard dark mode date picker styling */
+::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  filter: invert(1);
+  opacity: 0.8;
+}
+
+::-webkit-calendar-picker-indicator:hover {
+  opacity: 1;
 }
 
 *::-webkit-scrollbar-corner {
-  background: #000000; /* Black corner for consistency */
+  background: #000000;
+  /* Black corner for consistency */
 }
 
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out forwards;
+}

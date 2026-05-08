@@ -90,3 +90,14 @@ typings/
 
 # Electron-Forge
 out/
+
+# App Specific Exclusions
+database/
+src/assets/icons/
+src/assets/icon.png
+src/assets/icon_active.png
+scratch/
+.agents/
+*.tmp
+icons_list.txt
+scan_icons.py

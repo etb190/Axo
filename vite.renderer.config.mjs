@@ -1,10 +1,12 @@
-// vite.renderer.config.mjs
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 
 // https://vitejs.dev/config
 export default defineConfig({
+  base: './',
   plugins: [
+    react(),
     nodePolyfills({
       // Enable Node.js globals like `require`, `module`, and `exports`
       globals: {
@@ -13,21 +15,23 @@ export default defineConfig({
         process: true,
       },
       // Include specific Node.js modules
-      include: ['fs', 'path'],
+      include: ['events', 'stream', 'buffer', 'util'],
     }),
   ],
-  // Ensure Node.js modules are resolved correctly
+  // Standard Electron resolution
   resolve: {
     alias: {
-      // Map Node.js built-in modules to their polyfilled versions
-      fs: 'vite-plugin-node-polyfills/shims/fs',
-      path: 'vite-plugin-node-polyfills/shims/path',
+      // Avoid manual shims unless necessary
     },
   },
-  // Optimize for Electron's renderer process
   optimizeDeps: {
-    esbuildOptions: {
-      target: 'esnext',
+    // Remove force: true to avoid race conditions with Electron start
+    // Exclude problematic or unnecessary large dependencies from optimization
+    exclude: ['electron'],
+  },
+  build: {
+    rollupOptions: {
+      external: ['electron'],
     },
   },
 });

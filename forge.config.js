@@ -1,9 +1,14 @@
+const path = require('path');
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 module.exports = {
   packagerConfig: {
     asar: true,
+    icon: path.join(__dirname, 'src/assets/icon'),
+    extraResource: [
+      path.join(__dirname, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
+    ],
   },
   rebuildConfig: {},
   makers: [
