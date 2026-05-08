@@ -108,6 +108,7 @@ ipcMain.handle('select-pdf-file', async () => {
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+  app.setAppUserModelId('com.axo.app');
   app.setLoginItemSettings({
     openAtLogin: true,
     path: app.getPath("exe"),

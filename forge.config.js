@@ -5,7 +5,7 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
-    icon: path.join(__dirname, 'src/assets/icon'),
+    icon: path.join(__dirname, 'src/assets/icon.ico'),
     extraResource: [
       path.join(__dirname, 'node_modules', 'ffmpeg-static', 'ffmpeg.exe'),
       path.join(__dirname, 'src/assets/icon.png'),
