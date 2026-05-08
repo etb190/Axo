@@ -10,10 +10,14 @@ if (started) {
 let mainWindow;
 
 const getIconPath = (name) => {
+  const ext = process.platform === 'win32' ? '.ico' : '.png';
+  const baseName = name.split('.')[0];
+  const fileName = baseName + ext;
+  
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, name);
+    return path.join(process.resourcesPath, fileName);
   }
-  return path.join(__dirname, '../../src/assets', name);
+  return path.join(__dirname, '../../src/assets', fileName);
 };
 
 const createWindow = () => {
@@ -86,7 +90,12 @@ ipcMain.on('update-app-icon', (event, isActive) => {
   if (!mainWindow) return;
   const iconName = isActive ? 'icon_active.png' : 'icon.png';
   const iconPath = getIconPath(iconName);
-  mainWindow.setIcon(iconPath);
+  console.log('Main process setting icon:', iconPath, 'isActive:', isActive);
+  try {
+    mainWindow.setIcon(iconPath);
+  } catch (err) {
+    console.error('Failed to set icon:', err);
+  }
 });
 
 

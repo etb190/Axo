@@ -592,6 +592,7 @@ export const DataProvider = ({ children }) => {
         const updateIcon = () => {
             try {
                 const { ipcRenderer } = window.require('electron');
+                console.log('Sending update-app-icon:', !!isActive);
                 ipcRenderer.send('update-app-icon', !!isActive);
             } catch (e) { }
         };
