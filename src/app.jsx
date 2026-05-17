@@ -24,6 +24,7 @@ import LanguageLearning from './components/LanguageLearning';
 import LanguageParent from './components/LanguageParent';
 import LanguageTutor from './components/LanguageTutor';
 import Notes from './components/Notes';
+import SkillsTrainingHub from "./components/SkillsTrainingHub";
 
 import { MusicProvider } from './contexts/MusicContext';
 import MiniMusicPlayer from './components/MiniMusicPlayer';
@@ -75,6 +76,7 @@ const AppContent = () => {
                 <Route path='/Media' element={<MediaParent />} />
                 <Route path='/Media/:view' element={<MediaParent />} />
                 <Route path='/Notes' element={<Notes />} />
+                <Route path='/Training/*' element={<SkillsTrainingHub />} />
             </Routes>
         </HashRouter>
     );

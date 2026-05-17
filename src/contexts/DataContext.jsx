@@ -14,6 +14,7 @@ const PATHS = {
     READING_PROGRESS_DIR: path.join(BASE_DB, 'Books', 'Progress'),
     READING_NOTES_DIR: path.join(BASE_DB, 'Books', 'notes'),
     BOOK_CACHE_DIR: path.join(BASE_DB, 'Books', 'BookCache'),
+    ARTICLE_CACHE_DIR: path.join(BASE_DB, 'Articles', 'ArticleCache'),
     TIME_SESSIONS: path.join(BASE_DB, 'TimeTracker', 'sessions.json'),
     SKILLS_DIR: path.join(BASE_DB, 'Skills'),
     LEXICON_DIR: path.join(BASE_DB, 'Words'),
@@ -520,6 +521,15 @@ export const DataProvider = ({ children }) => {
                         } catch (e) { }
                     }
 
+                    // If no side-car cover, check cache
+                    if (!cover) {
+                        const cachePath = path.join(baseArticlePath, 'ThumbnailCache', name + '.jpg');
+                        try {
+                            await fs.stat(cachePath);
+                            cover = `file://${cachePath.replace(/\\/g, '/')}`;
+                        } catch (e) { }
+                    }
+
                     // Check progress
                     let progress = { current: 0, total: 0 };
                     try {
@@ -541,6 +551,8 @@ export const DataProvider = ({ children }) => {
                         subdirs.forEach(d => articleCategories.add(d.name));
 
                         const rootArticles = await Promise.all(pdfs.map(e => loadArticleEntry(e.name, shelfPath, null)));
+                        const articleCacheDir = PATHS.ARTICLE_CACHE_DIR;
+                        try { await fs.mkdir(articleCacheDir, { recursive: true }); } catch (e) { }
 
                         let subArticles = [];
                         for (const dir of subdirs) {
@@ -553,7 +565,54 @@ export const DataProvider = ({ children }) => {
                             } catch (e) { }
                         }
 
-                        articlesData.shelves[shelf] = [...rootArticles, ...subArticles].sort((a, b) => b.lastUpdated - a.lastUpdated);
+                        const articlesForShelf = [...rootArticles, ...subArticles];
+
+                        // Load cached-only articles
+                        let mergedArticles = [...articlesForShelf];
+                        if (shelf === 'Read') {
+                            try {
+                                const cacheFiles = await fs.readdir(articleCacheDir);
+                                const cacheJsons = cacheFiles.filter(f => f.endsWith('.json'));
+
+                                for (const cacheFile of cacheJsons) {
+                                    try {
+                                        const raw = await fs.readFile(path.join(articleCacheDir, cacheFile), 'utf8');
+                                        const cached = JSON.parse(raw);
+                                        if (cached.shelf !== shelf) continue;
+                                        const alreadyExists = articlesForShelf.some(a => a.name === cached.name);
+                                        if (alreadyExists) continue;
+
+                                    let cover = null;
+                                    if (cached.thumbnailPath) {
+                                        try {
+                                            await fs.stat(cached.thumbnailPath);
+                                            cover = `file://${cached.thumbnailPath.replace(/\\/g, '/')}`;
+                                        } catch (e) { }
+                                    }
+
+                                    let progress = { current: 0, total: cached.totalPages || 0 };
+                                    try {
+                                        const progPath = path.join(baseArticlePath, 'Progress', `${cached.name}.json`);
+                                        const rawProg = await fs.readFile(progPath, 'utf8');
+                                        progress = JSON.parse(rawProg);
+                                    } catch (e) { }
+
+                                    mergedArticles.push({
+                                        name: cached.name,
+                                        fullPath: cached.originalPath || path.join(shelfPath, cached.name + '.pdf'),
+                                        cover,
+                                        progress,
+                                        createdAt: new Date(cached.createdAt || cached.cachedAt || 0),
+                                        lastUpdated: new Date(cached.lastUpdated || cached.cachedAt || 0),
+                                        cachedOnly: true,
+                                        category: cached.category || null,
+                                    });
+                                } catch (e) { }
+                            }
+                            } catch (e) { }
+                        }
+
+                        articlesData.shelves[shelf] = mergedArticles.sort((a, b) => b.lastUpdated - a.lastUpdated);
                     } catch (e) { }
                 }
 

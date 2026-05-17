@@ -5,6 +5,7 @@ import MoveIcon from '../../assets/icons/move-vertical.svg';
 import TrashIcon from '../../assets/icons/delete.svg';
 import CheckIcon from '../../assets/icons/check.svg';
 import ZapIcon from '../../assets/icons/zap.svg';
+import MessageSquareIcon from '../../assets/icons/message.svg';
 import * as pdfjsLib from 'pdfjs-dist';
 
 const isModern = parseInt(pdfjsLib.version.split('.')[0]) >= 4;
@@ -18,12 +19,15 @@ import BookmarkIcon from '../../assets/icons/bookmark.svg';
 
 const BASE_ARTICLES = 'C:\\Users\\PC\\Desktop\\database\\Articles';
 const THUMBNAIL_CACHE = 'C:\\Users\\PC\\Desktop\\database\\Articles\\ThumbnailCache';
+const ARTICLE_CACHE_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Articles\\ArticleCache';
 const PROGRESS_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Progress';
+const NOTES_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Notes';
 
-try { if (!fs.existsSync(THUMBNAIL_CACHE)) fs.mkdirSync(THUMBNAIL_CACHE, { recursive: true }); } catch {}
-try { if (!fs.existsSync(PROGRESS_FOLDER)) fs.mkdirSync(PROGRESS_FOLDER, { recursive: true }); } catch {}
+try { if (!fs.existsSync(THUMBNAIL_CACHE)) fs.mkdirSync(THUMBNAIL_CACHE, { recursive: true }); } catch { }
+try { if (!fs.existsSync(ARTICLE_CACHE_FOLDER)) fs.mkdirSync(ARTICLE_CACHE_FOLDER, { recursive: true }); } catch { }
+try { if (!fs.existsSync(PROGRESS_FOLDER)) fs.mkdirSync(PROGRESS_FOLDER, { recursive: true }); } catch { }
 
-const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManageCategories, onFastReaderClick }) => {
+const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManageCategories, onFastReaderClick, onNotesClick }) => {
   const { refreshData } = useData();
   const [thumbnails, setThumbnails] = useState({});
   const [progressData, setProgressData] = useState({});
@@ -33,6 +37,11 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
   const [moveTargetCat, setMoveTargetCat] = useState('__root__');
   const [categoryModal, setCategoryModal] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
+  const [renameModal, setRenameModal] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [newCatInput, setNewCatInput] = useState('');
+  const [showNewCatInput, setShowNewCatInput] = useState(false);
   const [showCatDropdown, setShowCatDropdown] = useState(false);
   const catRef = useRef(null);
   const isReadingShelf = title === 'Currently Reading';
@@ -45,11 +54,11 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
   useEffect(() => {
     if (selectedCat !== 'all' && categories.length > 0 && !categories.includes(selectedCat)) {
       setSelectedCat('all');
-      try { localStorage.setItem(storageKey, 'all'); } catch {}
+      try { localStorage.setItem(storageKey, 'all'); } catch { }
     }
   }, [categories, selectedCat]);
 
-  const changeCat = (c) => { setSelectedCat(c); try { localStorage.setItem(storageKey, c); } catch {} setShowCatDropdown(false); };
+  const changeCat = (c) => { setSelectedCat(c); try { localStorage.setItem(storageKey, c); } catch { } setShowCatDropdown(false); };
 
   useEffect(() => {
     const h = (e) => { if (catRef.current && !catRef.current.contains(e.target)) setShowCatDropdown(false); };
@@ -67,11 +76,47 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
 
   const saveThumbnailCache = (filePath, dataUrl) => {
     try {
-      const name = path.basename(filePath, '.pdf') + '.jpg';
+      const name = path.basename(filePath).replace(/\.pdf$/i, '') + '.jpg';
       const cachePath = path.join(THUMBNAIL_CACHE, name);
       const base64 = dataUrl.replace(/^data:image\/jpeg;base64,/, '');
       fs.writeFileSync(cachePath, Buffer.from(base64, 'base64'));
-    } catch {}
+    } catch { }
+  };
+
+  const saveArticleCache = async (article, totalPages) => {
+    try {
+      const cacheFileName = article.name + '.json';
+      const cachePath = path.join(ARTICLE_CACHE_FOLDER, cacheFileName);
+
+      // Check if cache already exists for this shelf
+      const shelfKeyForCache = shelfKey || (title === 'Want to Read' ? 'WanttoRead' : title === 'Read' ? 'Read' : 'Reading');
+      if (fs.existsSync(cachePath)) {
+        const existing = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        if (existing.shelf === shelfKeyForCache && existing.lastUpdated) {
+          return;
+        }
+      }
+
+      const tName = path.basename(article.fullPath).replace(/\.pdf$/i, '') + '.jpg';
+      const tPath = path.join(THUMBNAIL_CACHE, tName);
+      const hasThumbnail = fs.existsSync(tPath);
+
+      const cacheData = {
+        name: article.name,
+        totalPages: totalPages || article.progress?.total || 0,
+        thumbnailPath: hasThumbnail ? tPath : null,
+        originalPath: article.fullPath,
+        shelf: shelfKeyForCache,
+        cachedAt: new Date().toISOString(),
+        createdAt: article.createdAt ? article.createdAt.toISOString() : new Date().toISOString(),
+        lastUpdated: article.lastUpdated ? article.lastUpdated.toISOString() : new Date().toISOString(),
+        category: article.category || null
+      };
+
+      fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
+    } catch (err) {
+      console.error('Error saving article cache:', err);
+    }
   };
 
   const generateThumbnail = async (article) => {
@@ -91,48 +136,93 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
 
   useEffect(() => {
     const process = async () => {
-      const loaded = {};
-      const needGen = [];
-      // 1. Load from disk cache first
-      for (const a of articles) {
-        if (a.cover || thumbnails[a.fullPath]) continue;
-        const cachePath = path.join(THUMBNAIL_CACHE, a.name + '.jpg');
-        try {
-          if (fs.existsSync(cachePath)) {
-            const buf = fs.readFileSync(cachePath);
-            loaded[a.fullPath] = `data:image/jpeg;base64,${buf.toString('base64')}`;
-          } else {
-            needGen.push(a);
-          }
-        } catch { needGen.push(a); }
-      }
-      if (Object.keys(loaded).length > 0) setThumbnails(prev => ({ ...prev, ...loaded }));
-      // 2. Generate missing ones
+      // 1. Initialize progress data from articles prop
+      const progMap = {};
+      articles.forEach(a => { if (a.progress) progMap[a.fullPath] = a.progress; });
+      setProgressData(progMap);
+
+      // 2. Identify missing ones
+      const needGen = articles.filter(a => !a.cover && !thumbnails[a.fullPath]);
+
+      // 3. Generate missing ones
       if (needGen.length > 0) {
         const results = await Promise.all(needGen.map(a => generateThumbnail(a)));
         const newThumbs = {};
         results.forEach(r => { if (r.thumbnail) newThumbs[r.path] = r.thumbnail; });
         if (Object.keys(newThumbs).length > 0) setThumbnails(prev => ({ ...prev, ...newThumbs }));
       }
+
+      // 4. Auto-cache articles on WanttoRead and Read shelves
+      const isCacheableShelf = shelfKey === 'Read' || shelfKey === 'WanttoRead';
+      if (isCacheableShelf) {
+        for (const article of articles) {
+          if (article.cachedOnly) continue;
+          try {
+            let totalPages = article.progress?.total || 0;
+            if (totalPages === 0 && fs.existsSync(article.fullPath)) {
+              try {
+                const data = fs.readFileSync(article.fullPath);
+                const pdf = await pdfjsLib.getDocument({ data }).promise;
+                totalPages = pdf.numPages;
+              } catch (e) { }
+            }
+            saveArticleCache(article, totalPages);
+          } catch (e) { }
+        }
+      }
+
+      // 5. HEAL PASS — retroactively fix any article whose stored total is 0 or missing.
+      const healUpdates = {};
+      for (const article of articles) {
+        const storedTotal = (progMap[article.fullPath]?.total) || 0;
+        if (storedTotal > 0) continue;
+
+        // Check progress file on disk directly
+        const pFile = path.join(PROGRESS_FOLDER, `${article.name}.json`);
+        let diskTotal = 0;
+        if (fs.existsSync(pFile)) {
+          try { diskTotal = JSON.parse(fs.readFileSync(pFile, 'utf-8')).total || 0; } catch { }
+        }
+
+        if (diskTotal > 0) {
+          healUpdates[article.fullPath] = { ...(progMap[article.fullPath] || {}), total: diskTotal };
+          continue;
+        }
+
+        // Page count truly unknown — parse the PDF and persist it
+        if (fs.existsSync(article.fullPath)) {
+          try {
+            const data = fs.readFileSync(article.fullPath);
+            const pdf = await pdfjsLib.getDocument({ data }).promise;
+            const total = pdf.numPages;
+            const existing = fs.existsSync(pFile)
+              ? (() => { try { return JSON.parse(fs.readFileSync(pFile, 'utf-8')); } catch { return {}; } })()
+              : {};
+            fs.writeFileSync(pFile, JSON.stringify({ current: existing.current || 0, ...existing, total }, null, 2));
+            healUpdates[article.fullPath] = { current: existing.current || 0, ...existing, total };
+            console.log(`[ArticleShelf] Healed page count for "${article.name}": ${total} pages`);
+          } catch (e) {
+            console.error(`[ArticleShelf] Could not heal page count for "${article.name}":`, e);
+          }
+        }
+      }
+
+      if (Object.keys(healUpdates).length > 0) {
+        setProgressData(prev => ({ ...prev, ...healUpdates }));
+      }
     };
     if (articles.length > 0) process();
   }, [articles]);
 
-  // Init progress data from props
-  useEffect(() => {
-    const pm = {};
-    articles.forEach(a => { if (a.progress) pm[a.fullPath] = a.progress; });
-    setProgressData(pm);
-  }, [articles]);
 
   const saveProgress = (article, currentPage) => {
     const pFile = path.join(PROGRESS_FOLDER, `${article.name}.json`);
     let storedTotal = progressData[article.fullPath]?.total || 0;
     if (storedTotal === 0 && fs.existsSync(pFile)) {
-      try { storedTotal = JSON.parse(fs.readFileSync(pFile, 'utf-8')).total || 0; } catch {}
+      try { storedTotal = JSON.parse(fs.readFileSync(pFile, 'utf-8')).total || 0; } catch { }
     }
     const clamped = storedTotal > 0 ? Math.max(0, Math.min(currentPage, storedTotal)) : Math.max(0, currentPage);
-    try { fs.writeFileSync(pFile, JSON.stringify({ current: clamped, total: storedTotal }, null, 2)); refreshData(); } catch {}
+    try { fs.writeFileSync(pFile, JSON.stringify({ current: clamped, total: storedTotal }, null, 2)); refreshData(); } catch { }
     setProgressData(prev => ({ ...prev, [article.fullPath]: { ...prev[article.fullPath], current: clamped, total: storedTotal } }));
   };
 
@@ -140,7 +230,7 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
     let totalPages = progressData[article.fullPath]?.total || 0;
     if (totalPages === 0) {
       const pf = path.join(PROGRESS_FOLDER, `${article.name}.json`);
-      if (fs.existsSync(pf)) { try { totalPages = JSON.parse(fs.readFileSync(pf, 'utf-8')).total || 0; } catch {} }
+      if (fs.existsSync(pf)) { try { totalPages = JSON.parse(fs.readFileSync(pf, 'utf-8')).total || 0; } catch { } }
     }
     if (totalPages === 0) {
       try {
@@ -149,10 +239,10 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
         totalPages = pdf.numPages;
         const pf = path.join(PROGRESS_FOLDER, `${article.name}.json`);
         let ex = { current: 0 };
-        if (fs.existsSync(pf)) { try { ex = JSON.parse(fs.readFileSync(pf, 'utf-8')); } catch {} }
+        if (fs.existsSync(pf)) { try { ex = JSON.parse(fs.readFileSync(pf, 'utf-8')); } catch { } }
         fs.writeFileSync(pf, JSON.stringify({ ...ex, total: totalPages }, null, 2));
         setProgressData(prev => ({ ...prev, [article.fullPath]: { ...prev[article.fullPath], total: totalPages } }));
-      } catch {}
+      } catch { }
     }
     setProgressModal({ article, totalPages });
   };
@@ -170,7 +260,7 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
       fs.renameSync(article.fullPath, targetPath);
       refreshData();
       setMoveModal(null);
-      setMoveTargetCat('__root__');
+      setMoveTargetCat(article.category || '__root__');
     } catch (err) { console.error('Error moving article:', err); }
   };
 
@@ -194,6 +284,63 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
     try { fs.unlinkSync(article.fullPath); refreshData(); setDeleteModal(null); } catch (err) { console.error(err); }
   };
 
+  const openRenameModal = (article) => {
+    setRenameValue(article.name);
+    setRenameError('');
+    setRenameModal(article);
+    setContextMenu(null);
+  };
+
+  const confirmRename = (article) => {
+    const newName = renameValue.trim();
+    if (!newName || newName === article.name) {
+      setRenameModal(null);
+      return;
+    }
+
+    try {
+      const oldName = article.name;
+      const dir = path.dirname(article.fullPath);
+      const newFilePath = path.join(dir, newName + '.pdf');
+
+      if (fs.existsSync(newFilePath)) {
+        setRenameError('An article with this name already exists in the same folder.');
+        return;
+      }
+
+      // 1. Rename the actual PDF file
+      if (fs.existsSync(article.fullPath)) {
+        fs.renameSync(article.fullPath, newFilePath);
+      }
+
+      // 2. Rename progress file
+      const oldProgPath = path.join(PROGRESS_FOLDER, oldName + '.json');
+      const newProgPath = path.join(PROGRESS_FOLDER, newName + '.json');
+      if (fs.existsSync(oldProgPath) && !fs.existsSync(newProgPath)) {
+        fs.renameSync(oldProgPath, newProgPath);
+      }
+
+      // 3. Rename thumbnail cache
+      const oldThumbPath = path.join(THUMBNAIL_CACHE, oldName + '.jpg');
+      const newThumbPath = path.join(THUMBNAIL_CACHE, newName + '.jpg');
+      if (fs.existsSync(oldThumbPath) && !fs.existsSync(newThumbPath)) {
+        fs.renameSync(oldThumbPath, newThumbPath);
+      }
+
+      // 4. Rename notes file
+      const oldNotesPath = path.join(NOTES_FOLDER, oldName + '.json');
+      const newNotesPath = path.join(NOTES_FOLDER, newName + '.json');
+      if (fs.existsSync(oldNotesPath) && !fs.existsSync(newNotesPath)) {
+        fs.renameSync(oldNotesPath, newNotesPath);
+      }
+
+      refreshData();
+      setRenameModal(null);
+    } catch (err) {
+      console.error('Error renaming article:', err);
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Title Row */}
@@ -208,9 +355,9 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
           {categories.length > 0 && (
             <div className="relative" ref={catRef}>
               <button onClick={() => setShowCatDropdown(!showCatDropdown)} className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-lg text-[11px] font-semibold text-gray-400 hover:text-white transition-all cursor-pointer">
-                <svg className="w-3 h-3 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                <svg className="w-3 h-3 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
                 <span>{selectedCat === 'all' ? 'All' : selectedCat}</span>
-                <svg className={`w-3 h-3 opacity-40 transition-transform duration-200 ${showCatDropdown ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                <svg className={`w-3 h-3 opacity-40 transition-transform duration-200 ${showCatDropdown ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9" /></svg>
               </button>
               {showCatDropdown && (
                 <div className="absolute top-full right-0 mt-1.5 w-48 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.6)] py-1.5 z-[100]">
@@ -225,7 +372,7 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
                   ))}
                   <div className="h-px bg-white/5 mx-2.5 my-1" />
                   <button onClick={() => { setShowCatDropdown(false); if (onManageCategories) onManageCategories(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[10px] font-bold text-gray-500 hover:text-white hover:bg-white/5 transition-all cursor-pointer uppercase tracking-widest">
-                    <svg className="w-3 h-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <svg className="w-3 h-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
                     Manage
                   </button>
                 </div>
@@ -246,7 +393,9 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
           {filtered.map(article => {
             const thumb = article.cover || thumbnails[article.fullPath];
             const prog = progressData[article.fullPath] || (article.progress || { current: 0, total: 0 });
-            const pct = prog.total > 0 ? Math.round((prog.current / prog.total) * 100) : 0;
+            const safeCurrent = Math.max(0, prog.current || 0);
+            const safeTotal = Math.max(0, prog.total || 0);
+            const pct = safeTotal > 0 ? Math.round((safeCurrent / safeTotal) * 100) : 0;
             return (
               <div key={article.fullPath} className="group relative flex flex-col gap-1 transition-all duration-300" onClick={() => openArticle(article)}>
                 <div
@@ -262,39 +411,88 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
                       </div>
                     </div>
                   )}
+                  {/* Progress Badge (on card) */}
+                  {isReadingShelf && safeTotal > 0 && (
+                    <div className="absolute top-3 right-3 px-2 py-1 rounded-lg bg-black/60 backdrop-blur-md border border-white/10 text-[10px] font-bold text-white transition-opacity duration-300 group-hover:opacity-0">
+                      {pct}%
+                    </div>
+                  )}
+                  {/* Cached-only badge */}
+                  {article.cachedOnly && (
+                    <div className="absolute top-3 left-3 px-2 py-1 rounded-lg bg-amber-500/20 backdrop-blur-md border border-amber-500/30 text-[9px] font-bold text-amber-400 transition-opacity duration-300 group-hover:opacity-0 uppercase tracking-wider">
+                      Cached
+                    </div>
+                  )}
                   {/* Progress bar for reading shelf */}
-                  {isReadingShelf && prog.total > 0 && (
+                  {isReadingShelf && safeTotal > 0 && (
                     <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
                       <div className="h-full bg-emerald-400 transition-all duration-500" style={{ width: `${pct}%` }} />
                     </div>
                   )}
                   {/* Hover overlay */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-all duration-300 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2">
-                    <div className="flex gap-2">
-                      <button onClick={(e) => { e.stopPropagation(); shell.showItemInFolder(article.fullPath); }}
-                        className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Show in Explorer">
-                        <svg className="w-[18px] h-[18px] text-white transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><circle cx="15" cy="15" r="3"/><path d="m21 21-1.5-1.5"/>
-                        </svg>
-                      </button>
-                      {isReadingShelf && (
-                        <button onClick={(e) => { e.stopPropagation(); openProgressModal(article); }}
-                          className="w-10 h-10 rounded-xl bg-emerald-600/80 hover:bg-emerald-600 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Update Progress">
-                          <img src={BookmarkIcon} className="w-[18px] h-[18px] transition-transform group-hover/btn:scale-110" style={{ filter: 'brightness(0) invert(1)' }} />
+                    <div className="flex flex-col items-center gap-2 translate-y-4 group-hover:translate-y-0 transition-transform duration-300 delay-75">
+                      <div className="flex gap-2">
+                        <button onClick={(e) => { e.stopPropagation(); if (onNotesClick) onNotesClick(article); }}
+                          className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Notes">
+                          <img src={MessageSquareIcon} className="w-[18px] h-[18px] transition-transform group-hover/btn:scale-110" style={{ filter: 'brightness(0) invert(1)' }} />
                         </button>
+                        {isReadingShelf && (
+                          <button onClick={(e) => { e.stopPropagation(); openProgressModal(article); }}
+                            className="w-10 h-10 rounded-xl bg-emerald-600/80 hover:bg-emerald-600 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Update Progress">
+                            <img src={BookmarkIcon} className="w-[18px] h-[18px] transition-transform group-hover/btn:scale-110" style={{ filter: 'brightness(0) invert(1)' }} />
+                          </button>
+                        )}
+                      </div>
+
+                      {article.fullPath?.toLowerCase().endsWith('.pdf') && (
+                        <div className="flex gap-2">
+                          {isReadingShelf && onFastReaderClick && (
+                            <button onClick={(e) => { e.stopPropagation(); onFastReaderClick(article); }}
+                              className="w-10 h-10 rounded-xl bg-amber-500/80 hover:bg-amber-500 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Fast Reader">
+                              <img src={ZapIcon} className="w-[18px] h-[18px]" style={{ filter: 'brightness(0) invert(1)' }} />
+                            </button>
+                          )}
+                          <button onClick={(e) => { e.stopPropagation(); shell.showItemInFolder(article.fullPath); }}
+                            className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Show in Explorer">
+                            <svg className="w-[18px] h-[18px] text-white transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /><circle cx="15" cy="15" r="3" /><path d="m21 21-1.5-1.5" />
+                            </svg>
+                          </button>
+                        </div>
                       )}
                     </div>
-                    {article.fullPath?.toLowerCase().endsWith('.pdf') && onFastReaderClick && (
-                      <button onClick={(e) => { e.stopPropagation(); onFastReaderClick(article); }}
-                        className="w-10 h-10 rounded-xl bg-amber-500/80 hover:bg-amber-500 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer" title="Fast Reader">
-                        <img src={ZapIcon} className="w-[18px] h-[18px]" style={{ filter: 'brightness(0) invert(1)' }} />
-                      </button>
-                    )}
                   </div>
                 </div>
-                <div className="px-1 cursor-pointer">
-                  <p className="text-[11px] font-semibold text-gray-300 group-hover:text-white truncate leading-tight">{article.name}</p>
-                  {isReadingShelf && prog.total > 0 && <p className="text-[9px] text-gray-600 font-bold">{pct}%</p>}
+                <div className="px-1 cursor-pointer space-y-1 relative group/peek">
+                  <p className="text-[11px] font-semibold text-gray-300 group-hover:text-white truncate leading-tight">
+                    {article.name}
+                  </p>
+                  
+                  {/* Peek Tooltip */}
+                  <div className="absolute bottom-full left-0 mb-2 w-max max-w-[200px] pointer-events-none opacity-0 group-hover/peek:opacity-100 translate-y-2 group-hover/peek:translate-y-0 transition-all duration-300 z-[150]">
+                    <div className="bg-[#0c0c0c]/95 backdrop-blur-xl border border-white/10 rounded-xl p-2.5 shadow-2xl">
+                      <p className="text-[10px] font-medium text-white leading-relaxed break-words">{article.name}</p>
+                      <div className="absolute top-full left-4 -mt-1 w-2 h-2 bg-[#0c0c0c] border-r border-b border-white/10 rotate-45" />
+                    </div>
+                  </div>
+
+                  {isReadingShelf && safeTotal > 0 && (
+                    <div className="space-y-1.5 pt-0.5">
+                      <div className="w-full h-0.5 bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${pct}%` }} />
+                      </div>
+                      <div className="flex justify-between items-center text-[9px] text-gray-600 font-medium uppercase tracking-tighter">
+                        <span>P. {safeCurrent} / {safeTotal}</span>
+                        {pct > 0 && <span className="text-emerald-400/60">{pct}%</span>}
+                      </div>
+                    </div>
+                  )}
+                  {(shelfKey === 'Read' || shelfKey === 'WanttoRead') && safeTotal > 0 && (
+                    <p className="text-[9px] text-gray-600 font-medium uppercase tracking-wider pt-0.5">
+                      {safeTotal} pages
+                    </p>
+                  )}
                 </div>
               </div>
             );
@@ -308,20 +506,26 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
           <div className="absolute flex flex-col gap-1.5 p-2 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.7)] min-w-[140px]"
             style={{ top: Math.min(contextMenu.y, window.innerHeight - 200), left: Math.min(contextMenu.x, window.innerWidth - 200) }}
             onClick={(e) => e.stopPropagation()}>
-            <button onClick={() => { setMoveModal(contextMenu.article); setMoveTargetCat('__root__'); setContextMenu(null); }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer">
+            <button onClick={() => { setMoveModal(contextMenu.article); setMoveTargetCat(contextMenu.article.category || '__root__'); setContextMenu(null); }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer w-full">
               <img src={MoveIcon} className="w-3.5 h-3.5 opacity-60" style={{ filter: 'brightness(0) invert(1)' }} /> Move
             </button>
-            {categories.length > 0 && (
-              <button onClick={() => { setCategoryModal(contextMenu.article); setContextMenu(null); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-300 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer">
-                <svg className="w-3.5 h-3.5 text-emerald-400 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                Category
+
+            <div className="grid grid-cols-2 gap-1.5">
+              <button onClick={() => openRenameModal(contextMenu.article)}
+                className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer">
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'brightness(0) invert(1)' }}><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
               </button>
-            )}
+
+              <button onClick={() => { setCategoryModal(contextMenu.article); setContextMenu(null); }}
+                className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer">
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'brightness(0) invert(1)' }}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
+              </button>
+            </div>
+
             <button onClick={() => { setDeleteModal(contextMenu.article); setContextMenu(null); }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer">
-              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-80" style={{ filter: 'invert(37%) sepia(93%) saturate(1352%) hue-rotate(339deg) brightness(103%) contrast(100%)' }} /> Delete
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 hover:text-red-300 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer w-full">
+              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-60" style={{ filter: 'invert(37%) sepia(93%) saturate(1352%) hue-rotate(339deg) brightness(103%) contrast(100%)' }} /> Delete
             </button>
           </div>
         </div>
@@ -329,7 +533,7 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
 
       {/* Move Modal */}
       {moveModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { { setMoveModal(null); setMoveTargetCat('__root__'); } }}}>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setMoveModal(null); setMoveTargetCat(moveModal?.category || '__root__'); } }}>
           <div className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-md w-full border border-white/10" onClick={e => e.stopPropagation()}>
             <h3 className="text-lg font-bold text-white mb-1 text-center">Move Article</h3>
             <p className="text-xs text-gray-500 text-center mb-6 truncate max-w-[280px] mx-auto">{moveModal.name}</p>
@@ -350,20 +554,38 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
                   );
                 })}
               </div>
+              {/* Category selection for move */}
               {categories.length > 0 && (
-                <div className="mt-3">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2 mb-2 block">Into Category</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    <button onClick={() => setMoveTargetCat('__root__')} className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer border ${moveTargetCat === '__root__' ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-white hover:bg-white/5'}`}>None</button>
+                <div className="space-y-2 mt-4">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
+                  <div className="flex flex-wrap gap-1.5 p-1">
+                    <button
+                      onClick={() => setMoveTargetCat('__root__')}
+                      className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCat === '__root__'
+                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                        : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
+                        }`}
+                    >
+                      None
+                    </button>
                     {categories.map(cat => (
-                      <button key={cat} onClick={() => setMoveTargetCat(cat)} className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer border ${moveTargetCat === cat ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-300' : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-white hover:bg-white/5'}`}>{cat}</button>
+                      <button
+                        key={cat}
+                        onClick={() => setMoveTargetCat(cat)}
+                        className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCat === cat
+                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                          : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
+                          }`}
+                      >
+                        {cat}
+                      </button>
                     ))}
                   </div>
                 </div>
               )}
             </div>
             <div className="mt-8">
-              <button onClick={() => { setMoveModal(null); setMoveTargetCat('__root__'); }} className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95">Cancel</button>
+              <button onClick={() => { setMoveModal(null); setMoveTargetCat(moveModal?.category || '__root__'); }} className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95">Cancel</button>
             </div>
           </div>
         </div>
@@ -372,24 +594,79 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
       {/* Category Modal */}
       {categoryModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setCategoryModal(null) } }}>
-          <div className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-white mb-1 text-center">Change Category</h3>
-            <p className="text-xs text-gray-500 text-center mb-6 truncate max-w-[200px] mx-auto">{categoryModal.name}</p>
-            <div className="grid gap-2">
+          <div className="bg-[#0f0f0f] rounded-[1.5rem] p-5 max-w-[300px] w-full border border-white/10 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex flex-col items-center text-center mb-3">
+              <h3 className="text-base font-bold text-white mb-0.5">Change Category</h3>
+              <p className="text-[10px] text-gray-500 max-w-[200px] line-clamp-1">{categoryModal.name}</p>
+            </div>
+            <div className="grid gap-1.5 overflow-y-auto pr-1 max-h-[320px] custom-scrollbar">
               <button onClick={() => changeCategoryForArticle(categoryModal, '__root__')} disabled={!categoryModal.category}
-                className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all ${!categoryModal.category ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
-                <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className={`text-sm font-semibold ${!categoryModal.category ? 'text-gray-500' : 'text-white'}`}>Uncategorized</span></div>
+                className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${!categoryModal.category ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
+                <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className="text-xs font-semibold">Uncategorized</span></div>
                 {!categoryModal.category && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
               </button>
               {categories.map(cat => (
                 <button key={cat} onClick={() => changeCategoryForArticle(categoryModal, cat)} disabled={categoryModal.category === cat}
-                  className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all ${categoryModal.category === cat ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
-                  <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${categoryModal.category === cat ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className={`text-sm font-semibold ${categoryModal.category === cat ? 'text-gray-500' : 'text-white'}`}>{cat}</span></div>
+                  className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${categoryModal.category === cat ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
+                  <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${categoryModal.category === cat ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className="text-xs font-semibold">{cat}</span></div>
                   {categoryModal.category === cat && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
                 </button>
               ))}
+
             </div>
-            <div className="mt-6"><button onClick={() => setCategoryModal(null)} className="w-full py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95">Cancel</button></div>
+
+            {/* Create new category */}
+            <div className="mt-3 pt-3 border-t border-white/5">
+              {showNewCatInput ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCatInput}
+                    onChange={(e) => setNewCatInput(e.target.value)}
+                    placeholder="Category name..."
+                    className="flex-1 bg-white/5 text-white text-xs font-medium rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newCatInput.trim()) {
+                        changeCategoryForArticle(categoryModal, newCatInput.trim());
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                      if (e.key === 'Escape') {
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newCatInput.trim()) {
+                        changeCategoryForArticle(categoryModal, newCatInput.trim());
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                    }}
+                    disabled={!newCatInput.trim()}
+                    className="px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Add
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowNewCatInput(true)}
+                  className="group flex items-center gap-2.5 p-2.5 rounded-lg border border-dashed border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
+                >
+                  <div className="w-5 h-5 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                    <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  </div>
+                  <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
+                </button>
+              )}
+            </div>
+            <div className="mt-4">
+              <button onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); }} className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-semibold text-gray-500 cursor-pointer transition-all active:scale-95">Cancel</button>
+            </div>
           </div>
         </div>
       )}
@@ -403,6 +680,48 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
             <div className="flex gap-3">
               <button onClick={() => setDeleteModal(null)} className="flex-1 py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all">Cancel</button>
               <button onClick={() => deleteArticle(deleteModal)} className="flex-1 py-3.5 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded-2xl text-sm font-bold text-red-400 cursor-pointer transition-all">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Modal */}
+      {renameModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4 animate-in fade-in duration-300" onMouseDown={(e) => { if (e.target === e.currentTarget) setRenameModal(null) }}>
+          <div className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex flex-col items-center text-center mb-8">
+              <div className="w-16 h-16 rounded-2xl bg-cyan-600/20 flex items-center justify-center border border-cyan-500/20 mb-4">
+                <svg className="w-8 h-8 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Rename Article</h3>
+              <p className="text-sm text-gray-500 max-w-[200px] line-clamp-2">{renameModal.name}</p>
+            </div>
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">New Name</label>
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="w-full bg-white/5 text-white text-sm font-medium rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                placeholder="Enter new name..."
+                autoFocus
+                onKeyDown={(e) => { if (e.key === 'Enter') confirmRename(renameModal); if (e.key === 'Escape') setRenameModal(null); }}
+                onFocus={(e) => e.target.select()}
+              />
+              {renameError && (
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+                  <svg className="w-3.5 h-3.5 text-red-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+                  <span className="text-[11px] font-medium text-red-400">{renameError}</span>
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-10">
+              <button onClick={() => setRenameModal(null)} className="px-6 py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95">Cancel</button>
+              <button
+                onClick={() => confirmRename(renameModal)}
+                disabled={!renameValue.trim() || renameValue.trim() === renameModal.name}
+                className="px-6 py-3.5 bg-cyan-600 hover:bg-cyan-500 rounded-2xl text-sm font-bold text-white cursor-pointer transition-all shadow-lg shadow-cyan-600/20 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-cyan-600"
+              >Rename</button>
             </div>
           </div>
         </div>

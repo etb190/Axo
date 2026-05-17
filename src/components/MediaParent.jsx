@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import TVPlayer from './TVPlayer';
 import Gallery from './Gallery';
 import Navbar from './Navbar';
@@ -21,6 +21,8 @@ const MediaParent = () => {
         }
     }, [view]);
 
+    const navigate = useNavigate();
+
     const switchView = (newView) => {
         if (isTransitioning || currentView === newView) return;
 
@@ -29,6 +31,10 @@ const MediaParent = () => {
             setCurrentView(newView);
             setIsTransitioning(false);
             try { localStorage.setItem(STORAGE_KEY, newView); } catch { }
+            // Sync URL
+            if (view !== newView) {
+                navigate(`/Media/${newView}`);
+            }
         }, 300);
     };
 

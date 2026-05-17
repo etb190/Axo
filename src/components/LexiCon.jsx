@@ -279,7 +279,7 @@ const LexiconApp = ({ showNavbar = true }) => {
         <>
             {showNavbar && <Navbar />}
             <style>{flipCardStyles}</style>
-            <div className="min-h-screen pb-10 bg-black pl-12">
+            <div className="h-screen overflow-y-auto pb-10 bg-black pl-12">
                 {toast && <Toast message={toast.message} type={toast.type} />}
 
                 {/* Edit Modal */}

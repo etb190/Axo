@@ -1,33 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import LibraryIcon from '../assets/icons/booktype.svg';
 import BookOpenIcon from '../assets/icons/book.svg';
 import FileTextIcon from '../assets/icons/edit.svg';
 import Books from './Books';
 import FastReader from './fastReading';
 import Articles from './Articles';
+import Recaller from './Recaller';
 import Navbar from './Navbar';
+import BrainIcon from '../assets/icons/brain.svg';
 
 const { shell } = window.require('electron');
+const path = window.require('path');
 
 const STORAGE_KEY = 'axo_books_last_view';
 
 const BooksParentView = () => {
   const { view } = useParams();
   const [currentView, setCurrentView] = useState(() => {
-    if (view === 'fastreader' || view === 'books' || view === 'articles') return view;
+    if (['fastreader', 'books', 'articles', 'recaller'].includes(view)) return view;
     try { return localStorage.getItem(STORAGE_KEY) || 'books'; } catch { return 'books'; }
   });
 
   useEffect(() => {
-    if (view && ['books', 'fastreader', 'articles'].includes(view)) {
+    if (view && ['books', 'fastreader', 'articles', 'recaller'].includes(view)) {
       setCurrentView(view);
+    } else if (!view) {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY) || 'books';
+        setCurrentView(saved);
+      } catch (e) {
+        setCurrentView('books');
+      }
     }
   }, [view]);
 
+  const navigate = useNavigate();
+
   const switchView = (newView) => {
-    setCurrentView(newView);
-    try { localStorage.setItem(STORAGE_KEY, newView); } catch { }
+    navigate(`/Books/${newView}`);
   };
 
   const openBook = (book) => {
@@ -37,7 +48,7 @@ const BooksParentView = () => {
   const onFastReaderClick = (book) => {
     try {
       localStorage.setItem('axo_fastreader_active_book', book.fullPath);
-      switchView('fastreader');
+      navigate('/Books/fastreader');
     } catch (e) {
       console.error('Error opening fast reader:', e);
     }
@@ -53,13 +64,19 @@ const BooksParentView = () => {
           <Books onBookClick={openBook} onFastReaderClick={onFastReaderClick} />
         ) : currentView === 'articles' ? (
           <Articles onFastReaderClick={onFastReaderClick} />
-        ) : (
+        ) : currentView === 'fastreader' ? (
           <FastReader />
+        ) : (
+          <Recaller 
+            bookPath={localStorage.getItem('axo_fastreader_active_book') || ''} 
+            bookName={path.basename(localStorage.getItem('axo_fastreader_active_book') || '').replace(/\.pdf$/i, '')}
+            onClose={() => navigate('/Books/books')}
+          />
         )}
       </div>
 
       {/* BOTTOM NAVIGATION SWITCHER */}
-      <div className="fixed bottom-6 left-[calc(50%+24px)] -translate-x-1/2 z-[200] flex items-center bg-black/80 backdrop-blur-xl border border-white/10 p-1 rounded-full shadow-2xl">
+      <div className="fixed bottom-6 left-[calc(50%+24px)] -translate-x-1/2 z-[200] flex items-center bg-black/80 backdrop-blur-xl border border-white/10 p-1 rounded-full shadow-2xl w-max whitespace-nowrap">
         <button
           onClick={() => switchView('books')}
           className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider cursor-pointer transition-all duration-300 ${currentView === 'books'
@@ -91,6 +108,17 @@ const BooksParentView = () => {
         >
           <img src={BookOpenIcon} className={`w-3.5 h-3.5 ${currentView === 'fastreader' ? 'invert' : ''}`} alt="" />
           <span>Reader</span>
+        </button>
+        <div className="w-[1px] h-3 bg-white/10 mx-1"></div>
+        <button
+          onClick={() => switchView('recaller')}
+          className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider cursor-pointer transition-all duration-300 ${currentView === 'recaller'
+            ? 'bg-white text-black shadow-lg scale-100'
+            : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
+            }`}
+        >
+          <img src={BrainIcon} className={`w-3.5 h-3.5 ${currentView === 'recaller' ? 'invert' : ''}`} alt="" />
+          <span>Recaller</span>
         </button>
       </div>
     </div>

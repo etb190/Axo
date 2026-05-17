@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../contexts/DataContext';
 import ArticleShelf from './articleComponents/ArticleShelf';
 import ArticleStats from './articleComponents/ArticleStats';
+import ArticleNotesModal from './articleComponents/ArticleNotesModal';
 
 const path = window.require('path');
 const fs = window.require('fs');
@@ -16,6 +17,7 @@ const Articles = ({ onFastReaderClick }) => {
   const { data, refreshData } = useData();
   const [showCatManager, setShowCatManager] = useState(false);
   const [newCatName, setNewCatName] = useState('');
+  const [selectedNoteArticle, setSelectedNoteArticle] = useState(null);
 
   const categories = data.articles?.categories || [];
 
@@ -75,10 +77,19 @@ const Articles = ({ onFastReaderClick }) => {
                 categories={categories}
                 onManageCategories={() => setShowCatManager(true)}
                 onFastReaderClick={onFastReaderClick}
+                onNotesClick={setSelectedNoteArticle}
               />
             </section>
           ))}
         </div>
+
+        {selectedNoteArticle && (
+          <ArticleNotesModal
+            articlePath={selectedNoteArticle.fullPath}
+            articleName={selectedNoteArticle.name}
+            onClose={() => setSelectedNoteArticle(null)}
+          />
+        )}
 
         {/* Category Manager Modal */}
         {showCatManager && (

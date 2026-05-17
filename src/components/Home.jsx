@@ -417,11 +417,21 @@ const Home = () => {
                                         </div>
                                     )}
                                 </div>
-                                <div className="flex flex-col justify-center">
+                                <div className="flex flex-col justify-center relative group/peek">
                                     <div className="text-[10px] font-bold uppercase text-neutral-500 mb-1">Currently Reading</div>
                                     <div className="text-sm font-bold text-white line-clamp-2 leading-tight">
                                         {data.reading.currentBook || "No active book"}
                                     </div>
+                                    
+                                    {/* Peek Tooltip */}
+                                    {data.reading.currentBook && (
+                                        <div className="absolute bottom-full left-0 mb-2 w-max max-w-[200px] pointer-events-none opacity-0 group-hover/peek:opacity-100 translate-y-2 group-hover/peek:translate-y-0 transition-all duration-300 z-[150]">
+                                            <div className="bg-[#0c0c0c]/95 backdrop-blur-xl border border-white/10 rounded-xl p-2.5 shadow-2xl">
+                                                <p className="text-[10px] font-medium text-white leading-relaxed break-words">{data.reading.currentBook}</p>
+                                                <div className="absolute top-full left-4 -mt-1 w-2 h-2 bg-[#0c0c0c] border-r border-b border-white/10 rotate-45" />
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                             <div className="mt-4 relative z-10">

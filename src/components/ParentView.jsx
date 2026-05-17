@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import ClockIcon from '../assets/icons/clock.svg';
 import LayoutIcon from '../assets/icons/dayplanner.svg';
 import PieChartIcon from '../assets/icons/chart.svg';
@@ -31,6 +31,8 @@ const ParentView = () => {
     }
   }, [view]);
 
+  const navigate = useNavigate();
+
   const switchView = (newView) => {
     if (isTransitioning || currentView === newView) return;
 
@@ -39,6 +41,10 @@ const ParentView = () => {
       setCurrentView(newView);
       setIsTransitioning(false);
       try { localStorage.setItem(STORAGE_KEY, newView); } catch { }
+      // Ensure URL stays in sync
+      if (view !== newView) {
+        navigate(`/Parentview/${newView}`);
+      }
     }, 300);
   };
 

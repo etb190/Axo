@@ -25,6 +25,7 @@ const PROGRESS_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\books\\Progress';
 const THUMBNAIL_CACHE_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\books\\ThumbnailCache';
 const BOOK_CACHE_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Books\\BookCache';
 const SKILLS_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Skills';
+const NOTES_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Books\\notes';
 
 // Create necessary folders
 [PROGRESS_FOLDER, THUMBNAIL_CACHE_FOLDER, BOOK_CACHE_FOLDER].forEach(folder => {
@@ -46,6 +47,11 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
   const [categoryModal, setCategoryModal] = useState(null);
   const [deleteModal, setDeleteModal] = useState(null);
   const [notFoundModal, setNotFoundModal] = useState(null);
+  const [renameModal, setRenameModal] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [newCatInput, setNewCatInput] = useState('');
+  const [showNewCatInput, setShowNewCatInput] = useState(false);
   const [showCatDropdown, setShowCatDropdown] = useState(false);
   const catDropdownRef = useRef(null);
 
@@ -57,13 +63,13 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
   useEffect(() => {
     if (selectedCategory !== 'all' && categories.length > 0 && !categories.includes(selectedCategory)) {
       setSelectedCategory('all');
-      try { localStorage.setItem(storageKey, 'all'); } catch {}
+      try { localStorage.setItem(storageKey, 'all'); } catch { }
     }
   }, [categories, selectedCategory, storageKey]);
 
   const changeCategory = (cat) => {
     setSelectedCategory(cat);
-    try { localStorage.setItem(storageKey, cat); } catch {}
+    try { localStorage.setItem(storageKey, cat); } catch { }
     setShowCatDropdown(false);
   };
 
@@ -90,7 +96,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
   // Save thumbnail to disk cache
   const saveThumbnailCache = (bookPath, dataUrl) => {
     try {
-      const cacheFileName = path.basename(bookPath, '.pdf') + '.jpg';
+      const cacheFileName = path.basename(bookPath).replace(/\.pdf$/i, '') + '.jpg';
       const cachePath = path.join(THUMBNAIL_CACHE_FOLDER, cacheFileName);
 
       // Convert data URL to buffer and save
@@ -529,7 +535,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
         }
         refreshData();
         setMoveModal(null);
-        setMoveTargetCategory('__root__');
+        setMoveTargetCategory(book.category || '__root__');
         setContextMenuBook(null);
         return;
       }
@@ -559,10 +565,107 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
 
       refreshData();
       setMoveModal(null);
-      setMoveTargetCategory('__root__');
+      setMoveTargetCategory(book.category || '__root__');
       setContextMenuBook(null);
     } catch (err) {
       console.error('Error moving book:', err);
+    }
+  };
+
+  const openRenameModal = (book) => {
+    setRenameValue(book.name);
+    setRenameError('');
+    setRenameModal(book);
+    setContextMenuBook(null);
+  };
+
+  const confirmRename = (book) => {
+    const newName = renameValue.trim();
+    if (!newName || newName === book.name) {
+      setRenameModal(null);
+      return;
+    }
+
+    try {
+      const oldName = book.name;
+      const dir = path.dirname(book.fullPath);
+      const newFilePath = path.join(dir, newName + '.pdf');
+
+      // Check if target already exists
+      if (fs.existsSync(newFilePath)) {
+        setRenameError('A book with this name already exists in the same folder.');
+        return;
+      }
+
+      // 1. Rename the actual PDF file (skip for cached-only)
+      if (!book.cachedOnly && fs.existsSync(book.fullPath)) {
+        fs.renameSync(book.fullPath, newFilePath);
+      }
+
+      // 2. Rename progress file
+      const oldProgPath = path.join(PROGRESS_FOLDER, oldName + '.json');
+      const newProgPath = path.join(PROGRESS_FOLDER, newName + '.json');
+      if (fs.existsSync(oldProgPath) && !fs.existsSync(newProgPath)) {
+        fs.renameSync(oldProgPath, newProgPath);
+      }
+
+      // 3. Rename thumbnail cache
+      const oldThumbPath = path.join(THUMBNAIL_CACHE_FOLDER, oldName + '.jpg');
+      const newThumbPath = path.join(THUMBNAIL_CACHE_FOLDER, newName + '.jpg');
+      if (fs.existsSync(oldThumbPath) && !fs.existsSync(newThumbPath)) {
+        fs.renameSync(oldThumbPath, newThumbPath);
+      }
+
+      // 4. Rename book cache
+      const oldCachePath = path.join(BOOK_CACHE_FOLDER, oldName + '.json');
+      const newCachePath = path.join(BOOK_CACHE_FOLDER, newName + '.json');
+      if (fs.existsSync(oldCachePath)) {
+        const cacheData = JSON.parse(fs.readFileSync(oldCachePath, 'utf8'));
+        cacheData.name = newName;
+        cacheData.originalPath = newFilePath;
+        cacheData.thumbnailPath = newThumbPath;
+        fs.writeFileSync(newCachePath, JSON.stringify(cacheData, null, 2));
+        if (oldName !== newName) fs.unlinkSync(oldCachePath);
+      }
+
+      // 5. Rename notes file
+      const oldNotesPath = path.join(NOTES_FOLDER, oldName + '.json');
+      const newNotesPath = path.join(NOTES_FOLDER, newName + '.json');
+      if (fs.existsSync(oldNotesPath) && !fs.existsSync(newNotesPath)) {
+        fs.renameSync(oldNotesPath, newNotesPath);
+      }
+
+      // 6. Update skills references
+      try {
+        if (fs.existsSync(SKILLS_FOLDER)) {
+          const files = fs.readdirSync(SKILLS_FOLDER).filter(f => f.endsWith('.json'));
+          for (const file of files) {
+            const filePath = path.join(SKILLS_FOLDER, file);
+            try {
+              const skill = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              let modified = false;
+              const updatedPhases = (skill.phases || []).map(phase => ({
+                ...phase,
+                items: (phase.items || []).map(item => {
+                  if (item.type === 'book' && item.data?.title === oldName) {
+                    modified = true;
+                    return { ...item, data: { ...item.data, title: newName } };
+                  }
+                  return item;
+                })
+              }));
+              if (modified) {
+                fs.writeFileSync(filePath, JSON.stringify({ ...skill, phases: updatedPhases }, null, 2));
+              }
+            } catch (e) { console.error(`Error updating skill file ${file}:`, e); }
+          }
+        }
+      } catch (e) { console.error('Error updating skills on rename:', e); }
+
+      refreshData();
+      setRenameModal(null);
+    } catch (err) {
+      console.error('Error renaming book:', err);
     }
   };
 
@@ -620,7 +723,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 </svg>
                 <span>{selectedCategory === 'all' ? 'All' : selectedCategory}</span>
                 <svg className={`w-3 h-3 opacity-40 transition-transform duration-200 ${showCatDropdown ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                  <polyline points="6 9 12 15 18 9"/>
+                  <polyline points="6 9 12 15 18 9" />
                 </svg>
               </button>
 
@@ -628,9 +731,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 <div className="absolute top-full right-0 mt-1.5 w-48 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.6)] py-1.5 z-[100] overflow-hidden">
                   <button
                     onClick={() => changeCategory('all')}
-                    className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${
-                      selectedCategory === 'all' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                    }`}
+                    className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === 'all' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                      }`}
                   >
                     <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === 'all' ? 'bg-blue-400' : 'bg-gray-600'}`} />
                     All
@@ -641,9 +743,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                       <button
                         key={cat}
                         onClick={() => changeCategory(cat)}
-                        className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${
-                          selectedCategory === cat ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                        }`}
+                        className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === cat ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                          }`}
                       >
                         <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === cat ? 'bg-blue-400' : 'bg-gray-600'}`} />
                         {cat}
@@ -657,7 +758,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                     className="w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[10px] font-bold text-gray-500 hover:text-white hover:bg-white/5 transition-all cursor-pointer uppercase tracking-widest"
                   >
                     <svg className="w-3 h-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                      <circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                     </svg>
                     Manage
                   </button>
@@ -746,16 +847,18 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
 
                       {book.fullPath?.toLowerCase().endsWith('.pdf') && (
                         <div className="flex gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (onFastReaderClick) onFastReaderClick(book);
-                            }}
-                            className="w-10 h-10 rounded-xl bg-amber-500/80 hover:bg-amber-500 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer"
-                            title="Fast Reader"
-                          >
-                            <img src={ZapIcon} className="w-[18px] h-[18px] invert brightness-0 transition-transform group-hover/btn:scale-110" style={{ filter: 'brightness(0) invert(1)' }} />
-                          </button>
+                          {isReadingShelf && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (onFastReaderClick) onFastReaderClick(book);
+                              }}
+                              className="w-10 h-10 rounded-xl bg-amber-500/80 hover:bg-amber-500 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer"
+                              title="Fast Reader"
+                            >
+                              <img src={ZapIcon} className="w-[18px] h-[18px] invert brightness-0 transition-transform group-hover/btn:scale-110" style={{ filter: 'brightness(0) invert(1)' }} />
+                            </button>
+                          )}
 
                           <button
                             onClick={(e) => {
@@ -766,8 +869,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                             title="Show in Explorer"
                           >
                             <svg className="w-[18px] h-[18px] text-white transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                              <circle cx="15" cy="15" r="3"/><path d="m21 21-1.5-1.5"/>
+                              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                              <circle cx="15" cy="15" r="3" /><path d="m21 21-1.5-1.5" />
                             </svg>
                           </button>
                         </div>
@@ -791,10 +894,19 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 </div>
 
                 {/* Book Info */}
-                <div className="px-1 space-y-1 cursor-pointer">
+                <div className="px-1 space-y-1 cursor-pointer relative group/peek">
                   <h4 className="text-[11px] font-semibold text-white/90 truncate group-hover:text-blue-400 transition-colors leading-tight">
                     {book.name}
                   </h4>
+
+                  {/* Peek Tooltip */}
+                  <div className="absolute bottom-full left-0 mb-2 w-max max-w-[200px] pointer-events-none opacity-0 group-hover/peek:opacity-100 translate-y-2 group-hover/peek:translate-y-0 transition-all duration-300 z-[150]">
+                    <div className="bg-[#0c0c0c]/95 backdrop-blur-xl border border-white/10 rounded-xl p-2.5 shadow-2xl">
+                      <p className="text-[10px] font-medium text-white leading-relaxed break-words">{book.name}</p>
+                      <div className="absolute top-full left-4 -mt-1 w-2 h-2 bg-[#0c0c0c] border-r border-b border-white/10 rotate-45" />
+                    </div>
+                  </div>
+
                   {isReadingShelf && progress && (
                     <div className="space-y-2 pt-1">
                       <div className="w-full h-0.5 bg-white/5 rounded-full overflow-hidden">
@@ -830,35 +942,42 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
             onContextMenu={(e) => { e.preventDefault(); setContextMenuBook(null); }}
           />
           <div
-            className="fixed z-[200] bg-[#0c0c0c]/95 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] p-1.5 flex items-center gap-1.5 animate-in fade-in zoom-in-95 duration-200"
+            className="fixed z-[500] bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-[0_20px_60px_rgba(0,0,0,0.7)] p-2 flex flex-col gap-1.5 min-w-[140px] animate-in fade-in zoom-in-95 duration-200"
             style={{
-              left: Math.min(contextMenuBook.x, window.innerWidth - 250),
-              top: Math.min(contextMenuBook.y, window.innerHeight - 100),
+              left: Math.min(contextMenuBook.x, window.innerWidth - 200),
+              top: Math.min(contextMenuBook.y, window.innerHeight - 200),
             }}
+            onClick={(e) => e.stopPropagation()}
           >
             <button
-              onClick={() => { setMoveModal(contextMenuBook.book); setMoveTargetCategory('__root__'); setContextMenuBook(null); }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer"
+              onClick={() => { setMoveModal(contextMenuBook.book); setMoveTargetCategory(contextMenuBook.book.category || '__root__'); setContextMenuBook(null); }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer w-full"
             >
-              <img src={MoveIcon} className="w-3.5 h-3.5 opacity-60 group-hover:opacity-100" style={{ filter: 'brightness(0) invert(1)' }} />
+              <img src={MoveIcon} className="w-3.5 h-3.5 opacity-60" style={{ filter: 'brightness(0) invert(1)' }} />
               Move
             </button>
 
-            {categories.length > 0 && (
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                onClick={() => openRenameModal(contextMenuBook.book)}
+                className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer"
+              >
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'brightness(0) invert(1)' }}><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+              </button>
+
               <button
                 onClick={() => { setCategoryModal(contextMenuBook.book); setContextMenuBook(null); }}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-violet-500/10 hover:bg-violet-500/20 border border-violet-500/20 text-violet-300 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer"
+                className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/5 text-gray-300 hover:text-white font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer"
               >
-                <svg className="w-3.5 h-3.5 text-violet-400 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                Category
+                <svg className="w-3.5 h-3.5 opacity-60" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'brightness(0) invert(1)' }}><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" /></svg>
               </button>
-            )}
+            </div>
 
             <button
-              onClick={() => { deleteBook(contextMenuBook.book); setContextMenuBook(null); }}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer"
+              onClick={() => { setDeleteModal(contextMenuBook.book); setContextMenuBook(null); }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 hover:text-red-300 font-bold text-[10px] uppercase tracking-widest transition-all cursor-pointer w-full"
             >
-              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-80" style={{ filter: 'invert(37%) sepia(93%) saturate(1352%) hue-rotate(339deg) brightness(103%) contrast(100%)' }} />
+              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-60" style={{ filter: 'invert(37%) sepia(93%) saturate(1352%) hue-rotate(339deg) brightness(103%) contrast(100%)' }} />
               Delete
             </button>
           </div>
@@ -951,9 +1070,9 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
             className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-col items-center text-center mb-8">
-              <div className="w-16 h-16 rounded-2xl bg-blue-600/20 flex items-center justify-center border border-blue-500/20 mb-4">
-                <img src={MoveIcon} className="w-8 h-8" style={{ filter: 'invert(52%) sepia(91%) saturate(2853%) hue-rotate(200deg) brightness(101%) contrast(92%)' }} />
+            <div className="flex flex-col items-center text-center mb-4">
+              <div className="w-8 h-8 rounded-2xl bg-blue-600/20 flex items-center justify-center border border-blue-500/20 mb-1">
+                <img src={MoveIcon} className="w-4 h-4" style={{ filter: 'invert(52%) sepia(91%) saturate(2853%) hue-rotate(200deg) brightness(101%) contrast(92%)' }} />
               </div>
               <h3 className="text-xl font-bold text-white mb-2">Move Book</h3>
               <p className="text-sm text-gray-500 max-w-[200px] line-clamp-2">{moveModal.name}</p>
@@ -993,16 +1112,15 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
 
               {/* Category selection for move */}
               {categories.length > 0 && (
-                <div className="mt-3">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2 mb-2 block">Into Category</label>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="space-y-2 mt-4">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
+                  <div className="flex flex-wrap gap-1.5 p-1">
                     <button
                       onClick={() => setMoveTargetCategory('__root__')}
-                      className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer border ${
-                        moveTargetCategory === '__root__'
-                          ? 'bg-blue-500/20 border-blue-500/30 text-blue-400'
-                          : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-white hover:bg-white/5'
-                      }`}
+                      className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCategory === '__root__'
+                        ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
+                        : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
+                        }`}
                     >
                       None
                     </button>
@@ -1010,11 +1128,10 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                       <button
                         key={cat}
                         onClick={() => setMoveTargetCategory(cat)}
-                        className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer border ${
-                          moveTargetCategory === cat
-                            ? 'bg-violet-500/20 border-violet-500/30 text-violet-300'
-                            : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-white hover:bg-white/5'
-                        }`}
+                        className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCategory === cat
+                          ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
+                          : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
+                          }`}
                       >
                         {cat}
                       </button>
@@ -1083,25 +1200,21 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
           onMouseDown={(e) => { if (e.target === e.currentTarget) { setCategoryModal(null) } }}
         >
           <div
-            className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300"
+            className="bg-[#0f0f0f] rounded-[1.5rem] p-5 max-w-[300px] w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300 flex flex-col max-h-[85vh]"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-col items-center text-center mb-6">
-              <div className="w-14 h-14 rounded-2xl bg-violet-600/20 flex items-center justify-center border border-violet-500/20 mb-4">
-                <svg className="w-7 h-7 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              </div>
-              <h3 className="text-lg font-bold text-white mb-1">Change Category</h3>
-              <p className="text-xs text-gray-500 max-w-[200px] line-clamp-2">{categoryModal.name}</p>
+            <div className="flex flex-col items-center text-center mb-3">
+              <h3 className="text-base font-bold text-white mb-0.5">Change Category</h3>
+              <p className="text-[10px] text-gray-500 max-w-[200px] line-clamp-1">{categoryModal.name}</p>
             </div>
 
-            <div className="grid gap-2">
+            <div className="grid gap-1.5 overflow-y-auto pr-1 max-h-[320px] custom-scrollbar">
               <button
                 onClick={() => changeCategoryForBook(categoryModal, '__root__')}
-                className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all ${
-                  !categoryModal.category
-                    ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
-                    : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
-                }`}
+                className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${!categoryModal.category
+                  ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                  : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
+                  }`}
                 disabled={!categoryModal.category}
               >
                 <div className="flex items-center gap-3">
@@ -1114,11 +1227,10 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 <button
                   key={cat}
                   onClick={() => changeCategoryForBook(categoryModal, cat)}
-                  className={`group flex items-center justify-between p-3.5 rounded-xl border transition-all ${
-                    categoryModal.category === cat
-                      ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
-                      : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
-                  }`}
+                  className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${categoryModal.category === cat
+                    ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                    : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
+                    }`}
                   disabled={categoryModal.category === cat}
                 >
                   <div className="flex items-center gap-3">
@@ -1128,14 +1240,128 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                   {categoryModal.category === cat && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
                 </button>
               ))}
+
             </div>
 
-            <div className="mt-6">
+            {/* Create new category */}
+            <div className="mt-3 pt-3 border-t border-white/5">
+              {showNewCatInput ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCatInput}
+                    onChange={(e) => setNewCatInput(e.target.value)}
+                    placeholder="Category name..."
+                    className="flex-1 bg-white/5 text-white text-xs font-medium rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newCatInput.trim()) {
+                        changeCategoryForBook(categoryModal, newCatInput.trim());
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                      if (e.key === 'Escape') {
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => {
+                      if (newCatInput.trim()) {
+                        changeCategoryForBook(categoryModal, newCatInput.trim());
+                        setNewCatInput('');
+                        setShowNewCatInput(false);
+                      }
+                    }}
+                    disabled={!newCatInput.trim()}
+                    className="px-3 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    Add
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowNewCatInput(true)}
+                  className="group flex items-center gap-2.5 p-2.5 rounded-lg border border-dashed border-white/10 hover:border-violet-500/40 hover:bg-violet-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
+                >
+                  <div className="w-5 h-5 rounded-md bg-violet-500/20 flex items-center justify-center">
+                    <svg className="w-3 h-3 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  </div>
+                  <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
+                </button>
+              )}
+            </div>
+
+            <div className="mt-4">
               <button
-                onClick={() => setCategoryModal(null)}
-                className="w-full py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95"
+                onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); }}
+                className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-semibold text-gray-500 cursor-pointer transition-all active:scale-95"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Rename Modal */}
+      {renameModal && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4 animate-in fade-in duration-300"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) { setRenameModal(null) } }}
+        >
+          <div
+            className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center mb-8">
+              <div className="w-16 h-16 rounded-2xl bg-cyan-600/20 flex items-center justify-center border border-cyan-500/20 mb-4">
+                <svg className="w-8 h-8 text-cyan-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Rename Book</h3>
+              <p className="text-sm text-gray-500 max-w-[200px] line-clamp-2">{renameModal.name}</p>
+            </div>
+
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">New Name</label>
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                className="w-full bg-white/5 text-white text-sm font-medium rounded-2xl px-5 py-4 focus:outline-none focus:ring-2 focus:ring-cyan-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                placeholder="Enter new name..."
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmRename(renameModal);
+                  if (e.key === 'Escape') setRenameModal(null);
+                }}
+                onFocus={(e) => {
+                  // Select all text on focus for easy replacement
+                  e.target.select();
+                }}
+              />
+              {renameError && (
+                <div className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 border border-red-500/20 rounded-xl">
+                  <svg className="w-3.5 h-3.5 text-red-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" /></svg>
+                  <span className="text-[11px] font-medium text-red-400">{renameError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mt-10">
+              <button
+                onClick={() => setRenameModal(null)}
+                className="px-6 py-3.5 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmRename(renameModal)}
+                disabled={!renameValue.trim() || renameValue.trim() === renameModal.name}
+                className="px-6 py-3.5 bg-cyan-600 hover:bg-cyan-500 rounded-2xl text-sm font-bold text-white cursor-pointer transition-all shadow-lg shadow-cyan-600/20 active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-cyan-600"
+              >
+                Rename
               </button>
             </div>
           </div>

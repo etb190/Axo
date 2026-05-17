@@ -22,6 +22,11 @@ const ReadingSessions = () => {
     const navigate = useNavigate();
     const readingBooks = data?.reading?.shelves?.['Reading'] || [];
     const wantToReadBooks = data?.reading?.shelves?.['WanttoRead'] || [];
+    const readBooks = data?.reading?.shelves?.['Read'] || [];
+    
+    const readingArticles = data?.articles?.shelves?.['Reading'] || [];
+    const wantToReadArticles = data?.articles?.shelves?.['WanttoRead'] || [];
+    const readArticles = data?.articles?.shelves?.['Read'] || [];
 
     const getBookThumbnail = (book) => {
         if (book.cover) return book.cover;
@@ -37,8 +42,8 @@ const ReadingSessions = () => {
         return null;
     };
 
-    const allBooks = [...readingBooks, ...wantToReadBooks].filter(
-        (book) => book.fullPath && book.fullPath.toLowerCase().endsWith('.pdf')
+    const allBooks = [...readingBooks, ...wantToReadBooks, ...readBooks, ...readingArticles, ...wantToReadArticles, ...readArticles].filter(
+        (item) => item.fullPath && item.fullPath.toLowerCase().endsWith('.pdf')
     );
 
     // Track which book is currently expanded in the detail view
@@ -83,24 +88,71 @@ const ReadingSessions = () => {
     const [progressStatus, setProgressStatus] = useState('');
     const [generatedSessions, setGeneratedSessions] = useState([]);
     const [totalPages, setTotalPages] = useState(0);
+    // Recursive scan for " - Sessions" folders
+    const scanForSessions = (dir) => {
+        let results = [];
+        try {
+            const list = fs.readdirSync(dir);
+            for (const file of list) {
+                const fullPath = path.join(dir, file);
+                try {
+                    const stat = fs.statSync(fullPath);
+                    if (stat.isDirectory()) {
+                        if (file.endsWith(' - Sessions')) {
+                            const bookName = file.replace(' - Sessions', '');
+                            const pdfPath = path.join(dir, bookName + '.pdf');
+                            const hasPdf = fs.existsSync(pdfPath);
+                            
+                            results.push({
+                                name: bookName,
+                                fullPath: hasPdf ? pdfPath : fullPath,
+                                pdfPath: hasPdf ? pdfPath : null,
+                                sessionPath: fullPath,
+                                isArticle: dir.toLowerCase().includes('articles'),
+                                isOrphan: !hasPdf
+                            });
+                        } else {
+                            results = results.concat(scanForSessions(fullPath));
+                        }
+                    }
+                } catch (statErr) { }
+            }
+        } catch (dirErr) { }
+        return results;
+    };
 
     // Check which books have existing " - Sessions" folders
     const checkSplitBooks = () => {
-        const found = [];
-        allBooks.forEach(book => {
-            const currentDir = path.dirname(book.fullPath);
-            const bookNameWithoutExt = path.basename(book.fullPath, '.pdf');
-            const outputDir = path.join(currentDir, `${bookNameWithoutExt} - Sessions`);
-            if (fs.existsSync(outputDir)) {
-                found.push(book);
+        const BASE_DIRS = [
+            'C:\\Users\\PC\\Desktop\\database\\Books',
+            'C:\\Users\\PC\\Desktop\\database\\Articles'
+        ];
+        
+        let allFound = [];
+        BASE_DIRS.forEach(baseDir => {
+            if (fs.existsSync(baseDir)) {
+                allFound = allFound.concat(scanForSessions(baseDir));
             }
         });
-        setSplitBooks(found);
+
+        const deduplicated = [];
+        const seenPaths = new Set();
+
+        allFound.forEach(found => {
+            if (!seenPaths.has(found.fullPath)) {
+                seenPaths.add(found.fullPath);
+                // Merge library metadata if available
+                const libMatch = allBooks.find(b => b.fullPath === found.fullPath);
+                deduplicated.push(libMatch ? { ...libMatch, ...found } : found);
+            }
+        });
+
+        setSplitBooks(deduplicated);
     };
 
     useEffect(() => {
         checkSplitBooks();
-    }, [data]);
+    }, [data, allBooks.length]);
 
     // When returning to detail view or clicking an already split book, load its existing sessions
     useEffect(() => {
@@ -112,6 +164,11 @@ const ReadingSessions = () => {
         let isMounted = true;
         const loadPages = async () => {
             try {
+                // If it's an orphan or directory, we can't load PDF pages
+                if (!fs.existsSync(activeBookPath) || fs.statSync(activeBookPath).isDirectory()) {
+                    setTotalPages(0);
+                    return;
+                }
                 const pdfBytes = fs.readFileSync(activeBookPath);
                 const srcDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
                 if (isMounted) {
@@ -119,14 +176,14 @@ const ReadingSessions = () => {
                 }
             } catch (err) {
                 console.error(err);
+                setTotalPages(0);
             }
         };
         loadPages();
 
-        const currentDir = path.dirname(activeBookPath);
-        const bookNameWithoutExt = path.basename(activeBookPath, '.pdf');
-        const outputDir = path.join(currentDir, `${bookNameWithoutExt} - Sessions`);
-
+        const bookItem = splitBooks.find(b => b.fullPath === activeBookPath);
+        const outputDir = bookItem?.sessionPath || path.join(path.dirname(activeBookPath), `${path.basename(activeBookPath).replace(/\.pdf$/i, '')} - Sessions`);
+        
         if (fs.existsSync(outputDir)) {
             try {
                 const files = fs.readdirSync(outputDir).filter(f => f.toLowerCase().endsWith('.pdf'));
@@ -150,9 +207,7 @@ const ReadingSessions = () => {
 
     const handleDeleteBook = () => {
         if (!bookToDelete) return;
-        const currentDir = path.dirname(bookToDelete.fullPath);
-        const bookNameWithoutExt = path.basename(bookToDelete.fullPath, '.pdf');
-        const outputDir = path.join(currentDir, `${bookNameWithoutExt} - Sessions`);
+        const outputDir = bookToDelete.sessionPath || path.join(path.dirname(bookToDelete.fullPath), `${path.basename(bookToDelete.fullPath).replace(/\.pdf$/i, '')} - Sessions`);
         
         try {
             if (fs.existsSync(outputDir)) {
@@ -196,7 +251,7 @@ const ReadingSessions = () => {
 
             const sessionsCount = Math.ceil(totalPages / pagesPerSession);
             const currentDir = path.dirname(activeBookPath);
-            const bookNameWithoutExt = path.basename(activeBookPath, '.pdf');
+            const bookNameWithoutExt = path.basename(activeBookPath).replace(/\.pdf$/i, '');
             const outputDir = path.join(currentDir, `${bookNameWithoutExt} - Sessions`);
 
             if (fs.existsSync(outputDir)) {
@@ -305,7 +360,7 @@ const ReadingSessions = () => {
                     <div className="space-y-4 animate-in fade-in duration-300">
                         <button
                             onClick={() => {
-                                try { localStorage.setItem('axo_books_last_view', 'books'); } catch {}
+                                try { localStorage.setItem('axo_books_last_view', 'books'); } catch { }
                                 navigate('/Books/books');
                             }}
                             className="flex items-center gap-2 text-[11px] font-bold text-gray-400 hover:text-white hover:bg-white/5 px-2 py-1.5 -ml-2 rounded-md transition-all w-fit uppercase tracking-widest mb-1 cursor-pointer"

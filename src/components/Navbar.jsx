@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import React from 'react';
 import { useData } from '../contexts/DataContext';
 import home from '../assets/icons/home.svg'
@@ -23,6 +23,9 @@ import editIcon from '../assets/icons/edit.svg';
 
 const Navbar = () => {
     const { data } = useData();
+    const location = useLocation();
+    const navigate = useNavigate();
+
     const menuItems = [
         { icon: home, name: 'Home', path: '/' },
         { icon: Dayplanner, name: 'Day Planner', path: '/Parentview' },
@@ -30,12 +33,47 @@ const Navbar = () => {
         { icon: Finances, name: 'Finances', path: '/Finances' },
         { icon: MusicIcon, name: 'Music', path: '/Music' },
         { icon: Plans, name: 'Growth', path: '/Growth' },
+        { icon: BrainIcon, name: 'Training', path: '/Training' },
         { icon: Concepts, name: 'Languages', path: '/Language' },
         { icon: Accounts, name: 'Accounts', path: '/Accounts' },
         { icon: PlayIcon, name: 'Media', path: '/Media' },
         { icon: Journal, name: 'Journal', path: '/DailyJournal' },
-        { icon: editIcon, name: 'Notes', path: '/Notes' },
     ];
+
+    const handleIconClick = (e, itemPath) => {
+        // If clicking a parent route we are already on (or inside), navigate to first child
+        if (itemPath !== '/' && location.pathname.startsWith(itemPath)) {
+            e.preventDefault();
+            let target = itemPath;
+            
+            // Map parent routes to their intended first child and update persistence
+            if (itemPath === '/Parentview') {
+                target = '/Parentview/timetracker';
+                localStorage.setItem('axo_parentview_last_view', 'timetracker');
+            }
+            else if (itemPath === '/Books') {
+                target = '/Books/books';
+                localStorage.setItem('axo_books_last_view', 'books');
+            }
+            else if (itemPath === '/Growth') {
+                target = '/Growth/goals';
+                localStorage.setItem('axo_growth_last_view', 'goals');
+            }
+            else if (itemPath === '/Language') {
+                target = '/Language/learning';
+                localStorage.setItem('axo_language_last_view', 'learning');
+            }
+            else if (itemPath === '/Media') {
+                target = '/Media/tv';
+                localStorage.setItem('axo_media_last_view', 'tv');
+            }
+            else if (itemPath === '/Training') {
+                target = '/Training'; // Hub is index
+            }
+            
+            navigate(`${target}?t=${Date.now()}`);
+        }
+    };
 
     return (
         <div className="fixed top-0 left-0 h-full w-12 bg-black/40 backdrop-blur-xl border-r border-white/5 z-[100]">
@@ -45,6 +83,7 @@ const Navbar = () => {
                         <li key={index} className="w-full flex justify-center">
                             <NavLink
                                 to={item.path}
+                                onClick={(e) => handleIconClick(e, item.path)}
                                 className={({ isActive }) =>
                                     `group relative flex items-center justify-center w-9 h-9 rounded-xl transition-all duration-300 cursor-pointer ${isActive
                                         ? 'bg-white shadow-[0_0_20px_rgba(255,255,255,0.15)] scale-105'

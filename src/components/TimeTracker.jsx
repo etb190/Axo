@@ -159,11 +159,14 @@ function Timetracker() {
         if (!running || isOverride) {
             const now = new Date()
             setStartTime(now)
+            setSeconds(0)
             setRunning(true);
             if (intervalRef.current) clearInterval(intervalRef.current);
+            // Use timestamp-based elapsed time to avoid drift
+            const startMs = now.getTime();
             intervalRef.current = setInterval(() => {
-                setSeconds(prev => prev + 1);
-            }, 1000)
+                setSeconds(Math.floor((Date.now() - startMs) / 1000));
+            }, 250)
 
             const taskId = taskNames.find(t => t.name === taskToUse)?.id;
 
@@ -206,28 +209,27 @@ function Timetracker() {
         if (intervalRef.current) {
             clearInterval(intervalRef.current);
             intervalRef.current = null;
-
-            const end = new Date()
-            setEndTime(end)
-            setRunning(false)
-
-            if (selectedTask) {
-                const taskId = taskNames.find(t => t.name === selectedTask)?.id
-                const session = {
-                    date: getYMD(startTime),
-                    durationSeconds: seconds,
-                    startTime: startTime.toISOString(),
-                    stopTime: end.toISOString(),
-                    taskId: taskId,
-                    taskName: selectedTask,
-                }
-                await saveSession(session)
-                showMessage('Session saved Successfully')
-
-            }
-
         }
 
+        const end = new Date()
+        // Compute actual elapsed from wall clock, not from the counter
+        const actualElapsed = startTime ? Math.floor((end.getTime() - startTime.getTime()) / 1000) : seconds;
+        setEndTime(end)
+        setRunning(false)
+
+        if (selectedTask && startTime) {
+            const taskId = taskNames.find(t => t.name === selectedTask)?.id
+            const session = {
+                date: getYMD(startTime),
+                durationSeconds: actualElapsed,
+                startTime: startTime.toISOString(),
+                stopTime: end.toISOString(),
+                taskId: taskId,
+                taskName: selectedTask,
+            }
+            await saveSession(session)
+            showMessage('Session saved Successfully')
+        }
 
         setSeconds(0)
         setSelectedTask(null)
@@ -239,6 +241,8 @@ function Timetracker() {
         if (running) {
             if (task.name === selectedTask) return;
             await handleStop();
+            // Allow React state to flush after handleStop before starting new task
+            await new Promise(r => setTimeout(r, 50));
         }
         setSelectedTask(task.name);
         handleStart(task.name);
@@ -282,16 +286,18 @@ function Timetracker() {
 
                 if (ongoing) {
                     const start = new Date(ongoing.startTime)
-                    const elapsed = Math.floor((Date.now() - start.getTime()) / 1000);
+                    const startMs = start.getTime();
+                    const elapsed = Math.floor((Date.now() - startMs) / 1000);
 
                     setStartTime(start);
                     setSeconds(elapsed);
                     setSelectedTask(ongoing.taskName);
                     setRunning(true);
 
+                    // Use timestamp-based elapsed time to avoid drift
                     intervalRef.current = setInterval(() => {
-                        setSeconds(prev => prev + 1)
-                    }, 1000)
+                        setSeconds(Math.floor((Date.now() - startMs) / 1000));
+                    }, 250)
                     showMessage(`Resumed ${ongoing.taskName}`)
                 }
             } catch (err) {
@@ -1289,10 +1295,10 @@ function Timetracker() {
                                 <span className='text-[9px] text-neutral-600'>LESS</span>
                                 <div className='flex space-x-1'>
                                     <div className='w-2 h-2 rounded-sm bg-neutral-900 border border-neutral-800'></div>
-                                    <div className='w-2 h-2 rounded-sm bg-emerald-950'></div>
-                                    <div className='w-2 h-2 rounded-sm bg-emerald-800'></div>
-                                    <div className='w-2 h-2 rounded-sm bg-emerald-600'></div>
                                     <div className='w-2 h-2 rounded-sm bg-emerald-400'></div>
+                                    <div className='w-2 h-2 rounded-sm bg-emerald-600'></div>
+                                    <div className='w-2 h-2 rounded-sm bg-emerald-800'></div>
+                                    <div className='w-2 h-2 rounded-sm bg-emerald-950'></div>
                                 </div>
                                 <span className='text-[9px] text-neutral-600'>MORE</span>
                             </div>
@@ -1309,12 +1315,12 @@ function Timetracker() {
                                         key={i}
                                         onClick={() => setDisplayByDay(dateStr)}
                                         className={`aspect-square rounded-[2px] transition-all duration-300 cursor-pointer ${(() => {
-                                            if (d >= 18000) return 'bg-emerald-400';
-                                            if (d >= 14400) return 'bg-emerald-600';
-                                            if (d >= 10800) return 'bg-emerald-700';
-                                            if (d >= 7200) return 'bg-emerald-800';
-                                            if (d >= 3600) return 'bg-emerald-900';
-                                            if (d > 0) return 'bg-emerald-950/60';
+                                            if (d >= 18000) return 'bg-emerald-950';
+                                            if (d >= 14400) return 'bg-emerald-900';
+                                            if (d >= 10800) return 'bg-emerald-800';
+                                            if (d >= 7200) return 'bg-emerald-700';
+                                            if (d >= 3600) return 'bg-emerald-600';
+                                            if (d > 0) return 'bg-emerald-400/60';
                                             return 'bg-neutral-900 border border-neutral-800/10';
                                         })()} ${isToday ? 'ring-1 ring-emerald-400 ring-offset-1 ring-offset-[#0a0a0a] z-10 scale-125 rounded-[1px]' : ''} hover:scale-150 hover:z-10 hover:shadow-lg`}
                                         title={`${block.date.toLocaleDateString()}\n${d > 0 ? formatHrsMins(d) : 'No time logged'}`}
