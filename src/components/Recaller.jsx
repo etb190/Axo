@@ -1,11 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useData } from '../contexts/DataContext';
 
 const path = window.require('path');
 const fs = window.require('fs');
 
-const NOTES_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Books\\notes';
-const THUMBNAIL_CACHE = 'C:\\Users\\PC\\Desktop\\database\\books\\ThumbnailCache';
+const BOOKS_NOTES_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Books\\notes';
+const ARTICLES_NOTES_FOLDER = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Notes';
+const BOOKS_THUMBNAIL_CACHE = 'C:\\Users\\PC\\Desktop\\database\\books\\ThumbnailCache';
+const ARTICLES_THUMBNAIL_CACHE = 'C:\\Users\\PC\\Desktop\\database\\Articles\\ThumbnailCache';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,7 +35,7 @@ function shuffle(arr) {
 // ─── Recall Modes (The internal engine) ───────────────────────────────────────
 
 /** READ MODE — paginated reading of all notes */
-function ReadMode({ notes, onBack }) {
+function ReadMode({ notes, title, onBack }) {
     const [idx, setIdx] = useState(0);
     const note = notes[idx];
 
@@ -55,38 +57,46 @@ function ReadMode({ notes, onBack }) {
             <div className="mode-header">
                 <button className="back-btn" onClick={onBack}>← Library</button>
                 <div className="mode-info">
-                    <span className="mode-label">Reviewing Notes</span>
+                    <span className="mode-label">{title || 'Reviewing Notes'}</span>
                     <span className="counter">{idx + 1} / {notes.length}</span>
                 </div>
             </div>
 
             <div className="card-area">
-                <div className="read-card">
-                    <div className="card-topbar">
-                        {(note.startPage || note.endPage) && (
-                            <span className="page-badge">
-                                {note.startPage && note.endPage
-                                    ? `Pages ${note.startPage} – ${note.endPage}`
-                                    : `Page ${note.startPage || note.endPage}`}
-                            </span>
-                        )}
-                        <span className="ts">{new Date(note.timestamp).toLocaleDateString()}</span>
+                {note ? (
+                    <div className="read-card">
+                        <div className="card-topbar">
+                            {(note.startPage || note.endPage) && (
+                                <span className="page-badge">
+                                    {note.startPage && note.endPage
+                                        ? `Pages ${note.startPage} – ${note.endPage}`
+                                        : `Page ${note.startPage || note.endPage}`}
+                                </span>
+                            )}
+                            <span className="ts">{new Date(note.timestamp).toLocaleDateString()}</span>
+                        </div>
+                        <div className="read-card-inner">
+                             <div className={`note-content ${isArabic(note.content) ? 'rtl' : ''}`} dangerouslySetInnerHTML={{ __html: note.content }} />
+                        </div>
                     </div>
-                    <div className="read-card-inner">
-                         <div className={`note-content ${isArabic(note.content) ? 'rtl' : ''}`} dangerouslySetInnerHTML={{ __html: note.content }} />
+                ) : (
+                    <div className="empty-state">
+                        <p>No notes inside</p>
                     </div>
-                </div>
+                )}
             </div>
 
-            <div className="nav-row">
-                <button className="nav-btn" onClick={() => setIdx(i => Math.max(0, i - 1))} disabled={idx === 0}>Prev</button>
-                <div className="dot-track">
-                    {notes.map((_, i) => (
-                        <div key={i} className={`dot ${i === idx ? 'active' : ''}`} onClick={() => setIdx(i)} />
-                    ))}
+            {notes.length > 0 && (
+                <div className="nav-row">
+                    <button className="nav-btn" onClick={() => setIdx(i => Math.max(0, i - 1))} disabled={idx === 0}>Prev</button>
+                    <div className="dot-track">
+                        {notes.map((_, i) => (
+                            <div key={i} className={`dot ${i === idx ? 'active' : ''}`} onClick={() => setIdx(i)} />
+                        ))}
+                    </div>
+                    <button className="nav-btn" onClick={() => setIdx(i => Math.min(notes.length - 1, i + 1))} disabled={idx === notes.length - 1}>Next</button>
                 </div>
-                <button className="nav-btn" onClick={() => setIdx(i => Math.min(notes.length - 1, i + 1))} disabled={idx === notes.length - 1}>Next</button>
-            </div>
+            )}
         </div>
     );
 }
@@ -95,56 +105,160 @@ function ReadMode({ notes, onBack }) {
 
 const Recaller = () => {
     const { data } = useData();
-    const [booksWithNotes, setBooksWithNotes] = useState([]);
-    const [selectedBook, setSelectedBook] = useState(null);
+    const [viewMode, setViewMode] = useState(() => {
+        try { return localStorage.getItem('axo_recaller_viewMode') || 'books'; } catch { return 'books'; }
+    }); // 'books' or 'articles'
+    const [sortOrder, setSortOrder] = useState(() => {
+        try { return localStorage.getItem('axo_recaller_sortOrder') || 'newest'; } catch { return 'newest'; }
+    });
+    const [selectedCategory, setSelectedCategory] = useState(() => {
+        try { return localStorage.getItem('axo_recaller_category') || 'all'; } catch { return 'all'; }
+    });
+    
+    const handleViewModeChange = (mode) => {
+        setViewMode(mode);
+        try { localStorage.setItem('axo_recaller_viewMode', mode); } catch { }
+    };
+    const handleSortOrderChange = (val) => {
+        setSortOrder(val);
+        try { localStorage.setItem('axo_recaller_sortOrder', val); } catch { }
+    };
+    const handleCategoryChange = (cat) => {
+        setSelectedCategory(cat);
+        try { localStorage.setItem('axo_recaller_category', cat); } catch { }
+        setShowCatDropdown(false);
+    };
+
+    const [showCatDropdown, setShowCatDropdown] = useState(false);
+    const catDropdownRef = useRef(null);
+    const [selectedItem, setSelectedItem] = useState(null);
     const [activeNotes, setActiveNotes] = useState([]);
 
     useEffect(() => {
-        if (!data?.reading?.shelves?.Read) return;
+        const handler = (e) => {
+            if (catDropdownRef.current && !catDropdownRef.current.contains(e.target)) setShowCatDropdown(false);
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
 
-        const readBooks = data.reading.shelves.Read;
-        const processed = readBooks.map(book => {
+    // Build a Set of book/article names that have note files — single sync readdir, no file reads
+    const bookNoteSet = useMemo(() => {
+        try {
+            const files = fs.readdirSync(BOOKS_NOTES_FOLDER);
+            return new Set(files.filter(f => f.endsWith('.json')).map(f => f.replace(/\.json$/i, '')));
+        } catch { return new Set(); }
+    }, []);
+
+    const articleNoteSet = useMemo(() => {
+        try {
+            const files = fs.readdirSync(ARTICLES_NOTES_FOLDER);
+            return new Set(files.filter(f => f.endsWith('.json')).map(f => f.replace(/\.json$/i, '')));
+        } catch { return new Set(); }
+    }, []);
+
+    // Filter books/articles from DataContext that have notes — pure in-memory, instant
+    const booksWithNotes = useMemo(() => {
+        if (!data?.reading?.shelves) return [];
+        const readBooks = data.reading.shelves.Read || [];
+        const readingBooks = data.reading.shelves.Reading || [];
+        const allBooks = [...readBooks, ...readingBooks];
+        return allBooks.filter(book => {
             const baseName = path.basename(book.fullPath).replace(/\.pdf$/i, '');
-            const notesPath = path.join(NOTES_FOLDER, `${baseName}.json`);
-            let count = 0;
-            if (fs.existsSync(notesPath)) {
-                try {
-                    const notes = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
-                    count = notes.length;
-                } catch (e) { console.error(e); }
+            return bookNoteSet.has(baseName);
+        }).map(book => {
+            const baseName = path.basename(book.fullPath).replace(/\.pdf$/i, '');
+            let thumbnail = book.cover || null;
+            if (!thumbnail) {
+                const thumbPath = path.join(BOOKS_THUMBNAIL_CACHE, `${baseName}.jpg`);
+                try { fs.statSync(thumbPath); thumbnail = `file://${thumbPath}`; } catch {}
             }
-            const thumbPath = path.join(THUMBNAIL_CACHE, `${baseName}.jpg`);
-            return { 
-                ...book, 
-                noteCount: count, 
-                thumbnail: fs.existsSync(thumbPath) ? `file://${thumbPath}` : null 
-            };
-        }).filter(b => b.noteCount > 0);
+            let noteModified = 0;
+            try { noteModified = fs.statSync(path.join(BOOKS_NOTES_FOLDER, `${baseName}.json`)).mtimeMs; } catch {}
+            return { ...book, thumbnail, noteModified };
+        });
+    }, [data?.reading?.shelves, bookNoteSet]);
 
-        setBooksWithNotes(processed);
-    }, [data]);
+    const articlesWithNotes = useMemo(() => {
+        if (!data?.articles?.shelves) return [];
+        const readArticles = data.articles.shelves.Read || [];
+        const readingArticles = data.articles.shelves.Reading || [];
+        const allArticles = [...readArticles, ...readingArticles];
+        return allArticles.filter(article => {
+            const baseName = path.basename(article.fullPath).replace(/\.pdf$/i, '');
+            return articleNoteSet.has(baseName);
+        }).map(article => {
+            const baseName = path.basename(article.fullPath).replace(/\.pdf$/i, '');
+            let thumbnail = article.cover || null;
+            if (!thumbnail) {
+                const thumbPath = path.join(ARTICLES_THUMBNAIL_CACHE, `${baseName}.jpg`);
+                try { fs.statSync(thumbPath); thumbnail = `file://${thumbPath}`; } catch {}
+            }
+            let noteModified = 0;
+            try { noteModified = fs.statSync(path.join(ARTICLES_NOTES_FOLDER, `${baseName}.json`)).mtimeMs; } catch {}
+            return { ...article, thumbnail, noteModified };
+        });
+    }, [data?.articles?.shelves, articleNoteSet]);
 
-    const handleBookSelect = (book) => {
-        const baseName = path.basename(book.fullPath).replace(/\.pdf$/i, '');
-        const notesPath = path.join(NOTES_FOLDER, `${baseName}.json`);
+    const handleItemSelect = (item) => {
+        const baseName = path.basename(item.fullPath).replace(/\.pdf$/i, '');
+        const notesFolder = viewMode === 'books' ? BOOKS_NOTES_FOLDER : ARTICLES_NOTES_FOLDER;
+        const notesPath = path.join(notesFolder, `${baseName}.json`);
         try {
             const notes = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
-            // Sort by timestamp ascending — earliest note first
-            notes.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            
+            // Sort by pages (startPage or endPage)
+            notes.sort((a, b) => {
+                const getPageNum = (note) => {
+                    let p = parseFloat(note.startPage);
+                    if (!isNaN(p)) return p;
+                    p = parseFloat(note.endPage);
+                    if (!isNaN(p)) return p;
+                    return Infinity;
+                };
+                
+                const pageA = getPageNum(a);
+                const pageB = getPageNum(b);
+
+                if (pageA !== pageB) {
+                    return pageA - pageB;
+                }
+                
+                // Fallback to timestamp if pages are equal or both missing
+                return new Date(a.timestamp) - new Date(b.timestamp);
+            });
+
             setActiveNotes(notes);
-            setSelectedBook(book);
+            setSelectedItem(item);
         } catch (e) {
             console.error(e);
         }
     };
 
-    if (selectedBook) {
+    const categories = viewMode === 'books' ? (data?.reading?.categories || []) : (data?.articles?.categories || []);
+
+    const currentList = useMemo(() => {
+        let list = viewMode === 'books' ? [...booksWithNotes] : [...articlesWithNotes];
+        
+        if (selectedCategory !== 'all' && categories.length > 0 && !categories.includes(selectedCategory)) {
+            handleCategoryChange('all');
+        }
+
+        list.sort((a, b) => {
+            if (sortOrder === 'newest') return b.noteModified - a.noteModified;
+            if (sortOrder === 'oldest') return a.noteModified - b.noteModified;
+            return 0;
+        });
+        return list;
+    }, [viewMode, booksWithNotes, articlesWithNotes, sortOrder, selectedCategory, categories]);
+
+    if (selectedItem) {
         return (
             <div className="recaller-view">
                 <ReadMode 
                     notes={activeNotes} 
-                    bookName={selectedBook.name} 
-                    onBack={() => setSelectedBook(null)} 
+                    title={selectedItem.name} 
+                    onBack={() => setSelectedItem(null)} 
                 />
                 <style>{`
                     .recaller-view {
@@ -156,7 +270,7 @@ const Recaller = () => {
                     .back-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
                     .back-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
                     .mode-info { display: flex; flex-direction: column; align-items: flex-end; }
-                    .mode-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #4f8ef7; font-weight: 800; }
+                    .mode-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: #4f8ef7; font-weight: 800; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
                     .counter { font-size: 14px; font-weight: 700; color: #555; }
                     
                     .card-area { flex: 1; display: flex; align-items: stretch; min-height: 0; }
@@ -184,48 +298,114 @@ const Recaller = () => {
     return (
         <div className="recaller-container">
             <div className="header-section">
-                <div className="title-group">
-                    <h1>Recaller</h1>
-                    <p>Review notes from read books.</p>
+
+                <div className="toggle-wrapper">
+                    <div className="toggle-container">
+                        <div className={`sliding-bg ${viewMode}`} />
+                        <button 
+                            className={`toggle-btn ${viewMode === 'books' ? 'active' : ''}`}
+                            onClick={() => { handleViewModeChange('books'); handleCategoryChange('all'); }}
+                        >
+                            <span className="icon">📚</span>
+                            <span className="label">Books</span>
+                            <span className="badge">{booksWithNotes.length}</span>
+                        </button>
+                        <button 
+                            className={`toggle-btn ${viewMode === 'articles' ? 'active' : ''}`}
+                            onClick={() => { setViewMode('articles'); setSelectedCategory('all'); }}
+                        >
+                            <span className="icon">📄</span>
+                            <span className="label">Articles</span>
+                            <span className="badge">{articlesWithNotes.length}</span>
+                        </button>
+                    </div>
                 </div>
-                <div className="stats-group">
+
+                <div className="stats-group" style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                    {categories.length > 0 && (
+                        <div className="relative" ref={catDropdownRef}>
+                            <button
+                                onClick={() => setShowCatDropdown(!showCatDropdown)}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] rounded-xl text-[11px] font-semibold text-gray-400 hover:text-white transition-all duration-200 cursor-pointer h-[36px]"
+                            >
+                                <svg className="w-3 h-3 opacity-50" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                                </svg>
+                                <span>{selectedCategory === 'all' ? 'All Categories' : selectedCategory}</span>
+                                <svg className={`w-3 h-3 opacity-40 transition-transform duration-200 ${showCatDropdown ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <polyline points="6 9 12 15 18 9" />
+                                </svg>
+                            </button>
+
+                            {showCatDropdown && (
+                                <div className="absolute top-full right-0 mt-1.5 w-48 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.6)] py-1.5 z-[100] overflow-hidden">
+                                    <div className="overflow-y-auto custom-scrollbar max-h-[140px]">
+                                        <button
+                                            onClick={() => handleCategoryChange('all')}
+                                            className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === 'all' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}
+                                        >
+                                            <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === 'all' ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                                            All Categories
+                                        </button>
+                                        {categories.map(cat => {
+                                            return (
+                                                <button
+                                                    key={cat}
+                                                    onClick={() => handleCategoryChange(cat)}
+                                                    className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === cat ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}
+                                                >
+                                                    <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === cat ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                                                    {cat}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                    <select 
+                        className="sort-dropdown"
+                        value={sortOrder}
+                        onChange={(e) => handleSortOrderChange(e.target.value)}
+                    >
+                        <option value="newest">Newest to Oldest</option>
+                        <option value="oldest">Oldest to Newest</option>
+                    </select>
                     <div className="stat">
-                        <span className="val">{booksWithNotes.length}</span>
-                        <span className="lab">Books</span>
+                        <span className="val">{currentList.length}</span>
+                        <span className="lab">{viewMode === 'books' ? 'Books' : 'Articles'}</span>
                     </div>
                 </div>
             </div>
 
             <div className="books-grid">
-                {booksWithNotes.map(book => (
-                    <div key={book.fullPath} className="book-card" onClick={() => handleBookSelect(book)}>
+                {currentList.map(item => (
+                    <div key={item.fullPath} className="book-card" onClick={() => handleItemSelect(item)}>
                         <div className="thumbnail-container">
-                            {book.thumbnail ? (
-                                <img src={book.thumbnail} alt={book.name} className="thumbnail" />
+                            {item.thumbnail ? (
+                                <img src={item.thumbnail} alt={item.name} className="thumbnail" />
                             ) : (
                                 <div className="placeholder-thumb">
-                                    <span>{book.name.charAt(0)}</span>
+                                    <span>{item.name.charAt(0)}</span>
                                 </div>
                             )}
-                            <div className="note-count-badge">
-                                <span className="icon">◈</span>
-                                {book.noteCount}
-                            </div>
+
                             <div className="overlay">
                                 <span>Recall</span>
                             </div>
                         </div>
                         <div className="book-info">
-                            <h3>{book.name}</h3>
+                            <h3>{item.name}</h3>
                         </div>
                     </div>
                 ))}
             </div>
 
-            {booksWithNotes.length === 0 && (
+            {currentList.length === 0 && (
                 <div className="empty-state">
                     <div className="icon">🧠</div>
-                    <p>No notes to recall yet</p>
+                    <p>No notes to recall from {viewMode === 'books' ? 'books' : 'articles'} yet</p>
                 </div>
             )}
 
@@ -234,12 +414,106 @@ const Recaller = () => {
                     min-height: 100vh; background: #050505; color: #fff;
                     padding: 20px 30px; padding-left: 65px;
                 }
-                .header-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; border-bottom: 1px solid #111; padding-bottom: 15px; }
+                .header-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; border-bottom: 1px solid #111; padding-bottom: 15px; gap: 15px; }
                 .title-group h1 { font-size: 18px; font-weight: 900; margin-bottom: 2px; color: #fff; }
                 .title-group p { color: #444; font-size: 11px; }
                 .stats-group .stat { display: flex; align-items: baseline; gap: 6px; }
                 .stats-group .val { font-size: 16px; font-weight: 800; color: #4f8ef7; }
                 .stats-group .lab { font-size: 9px; text-transform: uppercase; color: #333; letter-spacing: 0.05em; }
+
+                .sort-dropdown {
+                    background: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.05);
+                    color: #999;
+                    padding: 0 12px;
+                    border-radius: 12px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    outline: none;
+                    transition: all 0.2s;
+                    height: 36px;
+                    box-sizing: border-box;
+                }
+                .sort-dropdown:hover {
+                    color: #fff;
+                    border-color: rgba(255, 255, 255, 0.1);
+                }
+                .sort-dropdown option {
+                    background: #111;
+                    color: #fff;
+                }
+
+                /* Toggle Styles */
+                .toggle-wrapper {
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                }
+                .toggle-container {
+                    position: relative;
+                    display: flex;
+                    background: rgba(255, 255, 255, 0.03);
+                    border: 1px solid rgba(255, 255, 255, 0.05);
+                    padding: 3px;
+                    border-radius: 12px;
+                    gap: 2px;
+                    align-items: center;
+                    height: 36px;
+                    box-sizing: border-box;
+                }
+                .sliding-bg {
+                    position: absolute;
+                    top: 3px;
+                    left: 3px;
+                    height: calc(100% - 6px);
+                    width: calc(50% - 4px);
+                    background: rgba(79, 142, 247, 0.1);
+                    border: 1px solid rgba(79, 142, 247, 0.2);
+                    border-radius: 9px;
+                    transition: transform 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+                    z-index: 0;
+                }
+                .sliding-bg.books {
+                    transform: translateX(0);
+                }
+                .sliding-bg.articles {
+                    transform: translateX(calc(100% + 2px));
+                }
+                .toggle-btn {
+                    position: relative;
+                    z-index: 1;
+                    background: transparent;
+                    border: none;
+                    color: #555;
+                    padding: 6px 14px;
+                    border-radius: 9px;
+                    font-size: 11px;
+                    font-weight: 700;
+                    cursor: pointer;
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    transition: all 0.2s ease;
+                }
+                .toggle-btn:hover {
+                    color: #999;
+                }
+                .toggle-btn.active {
+                    color: #4f8ef7;
+                }
+                .toggle-btn .badge {
+                    background: rgba(255, 255, 255, 0.03);
+                    color: #444;
+                    padding: 1px 5px;
+                    border-radius: 4px;
+                    font-size: 9px;
+                    transition: all 0.2s ease;
+                }
+                .toggle-btn.active .badge {
+                    background: rgba(79, 142, 247, 0.15);
+                    color: #4f8ef7;
+                }
 
                 .books-grid {
                     display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));

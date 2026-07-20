@@ -8,7 +8,7 @@ import Edit from '../assets/icons/edit.svg'
 import Delete from '../assets/icons/delete.svg'
 const fs = require('fs').promises;
 const path = require('path');
-const DATA_FILE_PATH = 'C:/Users/PC/Desktop/Database/DayPlanner/tasks.json';
+const DATA_FILE_PATH = 'C:/Users/PC/Desktop/Database/TimeTracker/tasks.json';
 const SESSION_FILE_PATH = 'C:/Users/PC/Desktop/Database/TimeTracker/sessions.json'
 const TIMEGOALS_FILE_PATH = 'C:/Users/PC/Desktop/Database/TimeTracker/timeGoals.json'
 import React, { useEffect, useState, useRef } from 'react';
@@ -421,8 +421,7 @@ function Timetracker() {
             const newTaskName = {
                 id: uuidv4(),
                 name: input.trim(),
-                color: '#2563eb', // Default blue
-                isWork: true
+                color: '#2563eb' // Default blue
             };
             if (!newTaskName.name) {
                 showMessage('Task name cannot be empty');
@@ -449,7 +448,7 @@ function Timetracker() {
             await fs.writeFile(tempPath, JSON.stringify(updatedTaskNames, null, 2));
             await fs.rename(tempPath, DATA_FILE_PATH);
             await refreshData();
-            setTasknames(updatedTaskNames.filter(t => t.isWork));
+            setTasknames(updatedTaskNames);
             setInput('');
             setAddTaskOpen(false);
             showMessage('Task saved successfully!');
@@ -545,8 +544,7 @@ function Timetracker() {
             await directoryCheck();
             const data = await fs.readFile(DATA_FILE_PATH, 'utf-8');
             const parsed = data.trim() ? JSON.parse(data) : [];
-            const workTasks = Array.isArray(parsed) ? parsed.filter(t => t.isWork) : [];
-            setTasknames(workTasks);
+            setTasknames(Array.isArray(parsed) ? parsed : []);
         } catch (error) {
             if (error.code === 'ENOENT') {
                 setTasknames([]);
@@ -554,7 +552,6 @@ function Timetracker() {
                 console.error('Corrupted tasks.json:', error);
                 showMessage('Tasks file corrupted. Starting fresh.');
                 setTasknames([]);
-                // Optionally: backup or delete corrupted file
                 try {
                     await fs.unlink(DATA_FILE_PATH);
                 } catch { }
@@ -575,7 +572,7 @@ function Timetracker() {
         await fs.writeFile(tempPath, JSON.stringify(updatedTasks, null, 2))
         await fs.rename(tempPath, DATA_FILE_PATH)
         await refreshData();
-        setTasknames(updatedTasks.filter(t => t.isWork))
+        setTasknames(updatedTasks)
         showMessage('Task Renamed Successfully!')
         setViewTasks(false)
     }
@@ -590,7 +587,7 @@ function Timetracker() {
         await fs.writeFile(tempPath, JSON.stringify(updatedTasks, null, 2))
         await fs.rename(tempPath, DATA_FILE_PATH)
         await refreshData();
-        setTasknames(updatedTasks.filter(t => t.isWork))
+        setTasknames(updatedTasks)
         showMessage('Task Deleted Successfully!')
         setViewTasks(false)
     }

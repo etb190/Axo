@@ -167,6 +167,8 @@ const ArticleNotesModal = ({ articlePath, articleName, onClose, initialStartPage
   const [activeTab, setActiveTab] = useState('general'); // 'general' or 'main'
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const previousNoteLength = useRef(0);
+  const isPastingRef = useRef(false);
 
   const notesFilePath = path.join(NOTES_FOLDER, `${path.basename(articlePath, '.pdf')}.json`);
 
@@ -196,6 +198,7 @@ const ArticleNotesModal = ({ articlePath, articleName, onClose, initialStartPage
       attributes: {
         class: 'prose prose-sm dark:prose-invert max-w-none focus:outline-none min-h-[100px] p-2 text-white font-medium leading-tight custom-scrollbar bg-transparent prose-p:my-0 prose-headings:my-1 prose-ul:my-0 prose-ol:my-0 prose-li:my-0',
       },
+      handleScrollToSelection: () => true,
       handleTextInput(view, from, to, text) {
         if (text.length !== 1 || !/[a-z]/.test(text)) return false;
         const { state, dispatch } = view;
@@ -233,11 +236,28 @@ const ArticleNotesModal = ({ articlePath, articleName, onClose, initialStartPage
     }
   }, [editingId, editEditor, notes]);
 
+  // Sync mainEditor content back to state if changed externally
   useEffect(() => {
     if (mainEditor && newNote === '') {
       mainEditor.commands.setContent('');
     }
   }, [newNote, mainEditor]);
+
+  // Scroll to log entry button when pasting large text
+  useEffect(() => {
+    const diff = newNote.length - previousNoteLength.current;
+    if (diff > 50 && scrollContainerRef.current) {
+      // Instead of smooth scrolling, which fights with user scrolling, 
+      // just adjust scroll once immediately, or let tiptap finish first
+      setTimeout(() => {
+        const btnBar = scrollContainerRef.current.querySelector('.log-entry-bar-container');
+        if (btnBar) {
+          btnBar.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+        }
+      }, 50);
+    }
+    previousNoteLength.current = newNote.length;
+  }, [newNote]);
 
   useEffect(() => {
     const loadNotes = () => {
@@ -436,13 +456,14 @@ const ArticleNotesModal = ({ articlePath, articleName, onClose, initialStartPage
         <div
           ref={scrollContainerRef}
           className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-zinc-950/10 space-y-8"
+          style={{ overflowAnchor: 'none' }}
         >
           <div className="bg-zinc-900/30 border border-zinc-800/20 rounded-2xl overflow-hidden focus-within:border-emerald-500/40 transition-all shadow-2xl flex flex-col group">
             <MenuBar editor={mainEditor} />
             <div className="journal-editor-content book-note-editor w-full">
               <EditorContent editor={mainEditor} className="w-full" />
             </div>
-            <div className="flex bg-zinc-950/20 border-t border-zinc-800/10">
+            <div className="flex bg-zinc-950/20 border-t border-zinc-800/10 log-entry-bar-container">
               <div className="flex-1 flex border-r border-zinc-800/10">
                 <input
                   type="number"

@@ -729,30 +729,32 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
 
               {showCatDropdown && (
                 <div className="absolute top-full right-0 mt-1.5 w-48 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.6)] py-1.5 z-[100] overflow-hidden">
-                  <button
-                    onClick={() => changeCategory('all')}
-                    className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === 'all' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                      }`}
-                  >
-                    <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === 'all' ? 'bg-blue-400' : 'bg-gray-600'}`} />
-                    All
-                  </button>
-                  {categories.map(cat => {
-                    const count = books.filter(b => b.category === cat).length;
-                    return (
-                      <button
-                        key={cat}
-                        onClick={() => changeCategory(cat)}
-                        className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === cat ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
-                          }`}
-                      >
-                        <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === cat ? 'bg-blue-400' : 'bg-gray-600'}`} />
-                        {cat}
-                        <span className="ml-auto text-[9px] font-bold text-gray-600">{count}</span>
-                      </button>
-                    );
-                  })}
-                  <div className="h-px bg-white/5 mx-2.5 my-1" />
+                  <div className="overflow-y-auto custom-scrollbar max-h-[140px]">
+                    <button
+                      onClick={() => changeCategory('all')}
+                      className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === 'all' ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                        }`}
+                    >
+                      <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === 'all' ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                      All
+                    </button>
+                    {categories.map(cat => {
+                      const count = books.filter(b => b.category === cat).length;
+                      return (
+                        <button
+                          key={cat}
+                          onClick={() => changeCategory(cat)}
+                          className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCategory === cat ? 'bg-blue-500/10 text-blue-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'
+                            }`}
+                        >
+                          <div className={`w-1.5 h-1.5 rounded-full ${selectedCategory === cat ? 'bg-blue-400' : 'bg-gray-600'}`} />
+                          {cat}
+                          <span className="ml-auto text-[9px] font-bold text-gray-600">{count}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="h-px bg-white/5 mx-2.5 my-1 shrink-0" />
                   <button
                     onClick={() => { setShowCatDropdown(false); if (onManageCategories) onManageCategories(); }}
                     className="w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[10px] font-bold text-gray-500 hover:text-white hover:bg-white/5 transition-all cursor-pointer uppercase tracking-widest"

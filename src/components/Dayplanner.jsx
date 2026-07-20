@@ -75,6 +75,14 @@ const DayPlanner = () => {
   const [selectedDuration, setSelectedDuration] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeWorkSession, setActiveWorkSession] = useState(null);
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem('axo_dayplanner_viewMode') || 'plan'; } catch { return 'plan'; }
+  }); // 'plan' or 'log'
+
+  const handleViewModeChange = (mode) => {
+    setViewMode(mode);
+    try { localStorage.setItem('axo_dayplanner_viewMode', mode); } catch { }
+  };
 
   const { data, refreshData } = useData();
   useEffect(() => {
@@ -196,6 +204,119 @@ const DayPlanner = () => {
   };
   const todayDayIndex = getEffectiveDayIndex();
 
+  // --- ACTIVITY LOG: Convert TimeTracker sessions to planner events ---
+  const LOG_COLORS = [
+    '#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706',
+    '#4f46e5', '#9333ea', '#0891b2', '#16a34a', '#c026d3',
+  ];
+
+  const getLogEvents = () => {
+    const sessions = data.time?.allSessions || [];
+    if (sessions.length === 0) return [];
+
+    // Build color map from task names
+    const taskColorMap = {};
+    let colorIdx = 0;
+    // Try to use DayPlanner saved task colors first
+    savedTasks.forEach(t => { taskColorMap[t.name.toLowerCase()] = t.color; });
+
+    const mondayDate = weekDates[0];
+    const mondayStart = new Date(mondayDate);
+    mondayStart.setHours(0, 0, 0, 0);
+    const sundayEnd = new Date(weekDates[6]);
+    sundayEnd.setHours(23, 59, 59, 999);
+
+    const logEvents = [];
+
+    sessions.forEach(session => {
+      if (!session.startTime || !session.stopTime) return;
+      const start = new Date(session.startTime);
+      const stop = new Date(session.stopTime);
+
+      // Filter to current week
+      if (stop < mondayStart || start > sundayEnd) return;
+
+      // Assign color
+      const taskKey = (session.taskName || 'Unknown').toLowerCase();
+      if (!taskColorMap[taskKey]) {
+        taskColorMap[taskKey] = LOG_COLORS[colorIdx % LOG_COLORS.length];
+        colorIdx++;
+      }
+      const color = taskColorMap[taskKey];
+
+      // Determine day index (0=Mon..6=Sun)
+      const sessionDay = start.getDay(); // 0=Sun
+      let dayIndex = sessionDay === 0 ? 6 : sessionDay - 1;
+
+      // Convert to minutes since midnight
+      let startMinutes = start.getHours() * 60 + start.getMinutes();
+      let endMinutes = stop.getHours() * 60 + stop.getMinutes();
+
+      // Handle sessions crossing midnight
+      if (stop.getDate() !== start.getDate() || stop.getMonth() !== start.getMonth()) {
+        // First segment: start to midnight
+        const midnightMins = 24 * 60;
+        logEvents.push({
+          id: `log-${session.startTime}-a`,
+          dayIndex,
+          startMinutes,
+          endMinutes: midnightMins,
+          taskName: session.taskName || 'Unknown',
+          color,
+          isWork: true,
+        });
+        // Second segment: midnight to stop (next day)
+        const nextDayIndex = (dayIndex + 1) % 7;
+        // For late-night (before 5am), keep on same logical day with minutes > 1440
+        if (stop.getHours() < 5) {
+          logEvents.push({
+            id: `log-${session.startTime}-b`,
+            dayIndex,
+            startMinutes: 1440,
+            endMinutes: 1440 + endMinutes,
+            taskName: session.taskName || 'Unknown',
+            color,
+            isWork: true,
+          });
+        } else {
+          logEvents.push({
+            id: `log-${session.startTime}-b`,
+            dayIndex: nextDayIndex,
+            startMinutes: 0,
+            endMinutes,
+            taskName: session.taskName || 'Unknown',
+            color,
+            isWork: true,
+          });
+        }
+        return;
+      }
+
+      // Handle late-night sessions (before 5 AM) - attach to previous day
+      if (start.getHours() < 5) {
+        dayIndex = (dayIndex - 1 + 7) % 7;
+        startMinutes += 1440;
+        endMinutes += 1440;
+      }
+
+      if (endMinutes <= startMinutes) endMinutes = startMinutes + 1; // safety
+
+      logEvents.push({
+        id: `log-${session.startTime}`,
+        dayIndex,
+        startMinutes,
+        endMinutes,
+        taskName: session.taskName || 'Unknown',
+        color,
+        isWork: true,
+      });
+    });
+
+    return logEvents;
+  };
+
+  const displayEvents = viewMode === 'log' ? getLogEvents() : events;
+
   const openCreateModal = (dayIndex, hourIndex) => {
     const clickedActualHour = timeBlocks[hourIndex].actualHour;
     setSelectedCell({ dayIndex, hourIndex, actualHour: clickedActualHour });
@@ -231,7 +352,7 @@ const DayPlanner = () => {
     setTaskName(event.taskName);
     setStartTime(formatMinutesToTime(event.startMinutes));
     setEndTime(formatMinutesToTime(event.endMinutes));
-    setIsWorkTask(event.isWork || false);
+    setTaskName(event.taskName);
     setSelectedDuration('');
 
     const matchingEvents = events.filter(ev =>
@@ -514,7 +635,7 @@ const DayPlanner = () => {
     return parts.join(' ');
   };
 
-  const calculateWorkHours = () => {
+  const calculateScheduledHours = () => {
     const now = new Date();
     const currentDayIndex = now.getHours() < 5
       ? (now.getDay() === 0 ? 5 : (now.getDay() === 1 ? 6 : now.getDay() - 2))
@@ -579,7 +700,7 @@ const DayPlanner = () => {
           setTaskName(ev.taskName);
           setStartTime(formatMinutesToTime(ev.startMinutes));
           setEndTime(formatMinutesToTime(ev.endMinutes));
-          setIsWorkTask(ev.isWork || false);
+          setEndTime(formatMinutesToTime(ev.endMinutes));
           setSelectedDuration('');
           const matchingEvents = events.filter(e =>
             e.taskName === ev.taskName &&
@@ -598,6 +719,7 @@ const DayPlanner = () => {
   return (
     <div className=" pl-3  min-h-screen bg-black transition-colors duration-500 font-sans relative">
       <div className="max-w-[1700px] mx-auto p-4 pl-12 lg:pl-6 pt-6 animate-in slide-in-from-left duration-300">
+
         {/* Info Squares - Back to top, refined */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
           <div
@@ -618,26 +740,26 @@ const DayPlanner = () => {
 
           <div className="bg-zinc-950 rounded-xl border border-white/5 p-3">
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-zinc-500 text-[8px] font-bold uppercase tracking-[0.3em]">Work Hours</span>
+              <span className="text-zinc-500 text-[8px] font-bold uppercase tracking-[0.3em]">Scheduled Hours</span>
               <div className="p-1 rounded-lg bg-white/5">
                 <LocalIcon src={calendarIcon} size={12} className="text-zinc-400" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-x-2 gap-y-1">
               <div className="flex items-baseline gap-1">
-                <span className="text-sm font-bold text-white font-mono">{calculateWorkHours().today}h</span>
+                <span className="text-sm font-bold text-white font-mono">{calculateScheduledHours().today}h</span>
                 <span className="text-[7px] text-zinc-600 uppercase font-bold tracking-wider">Day</span>
               </div>
               <div className="flex items-baseline gap-1">
-                <span className="text-sm font-bold text-white font-mono">{calculateWorkHours().week}h</span>
+                <span className="text-sm font-bold text-white font-mono">{calculateScheduledHours().week}h</span>
                 <span className="text-[7px] text-zinc-600 uppercase font-bold tracking-wider">Week</span>
               </div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[11px] font-bold text-zinc-400 font-mono">{calculateWorkHours().month}h</span>
+                <span className="text-[11px] font-bold text-zinc-400 font-mono">{calculateScheduledHours().month}h</span>
                 <span className="text-[7px] text-zinc-700 uppercase font-bold tracking-wider">Month</span>
               </div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[11px] font-bold text-zinc-400 font-mono">{calculateWorkHours().year}h</span>
+                <span className="text-[11px] font-bold text-zinc-400 font-mono">{calculateScheduledHours().year}h</span>
                 <span className="text-[7px] text-zinc-700 uppercase font-bold tracking-wider">Year</span>
               </div>
             </div>
@@ -689,7 +811,18 @@ const DayPlanner = () => {
             <table className="w-full border-collapse table-fixed min-w-[800px]">
               <thead>
                 <tr className="border-b border-white/5">
-                  <th className="w-20 h-10 sticky left-0 z-30 bg-black/95 backdrop-blur-md border-r border-white/5"></th>
+                  <th className="w-20 h-10 sticky left-0 z-30 bg-black/95 backdrop-blur-md border-r border-white/5">
+                    <div className="flex items-center justify-center h-full">
+                      <button
+                        onClick={() => handleViewModeChange(viewMode === 'plan' ? 'log' : 'plan')}
+                        className={`w-4 h-4 rounded-full border transition-all cursor-pointer ${
+                          viewMode === 'plan'
+                            ? 'bg-white border-white/30'
+                            : 'bg-black border-white/20'
+                        }`}
+                      />
+                    </div>
+                  </th>
                   {days.map((day, idx) => {
                     const date = weekDates[idx];
                     const isToday = idx === todayDayIndex;
@@ -726,14 +859,14 @@ const DayPlanner = () => {
                       return (
                         <td
                           key={dayIndex}
-                          onClick={() => openCreateModal(dayIndex, hourIndex)}
-                          className={`h-10 border-r border-white/5 cursor-pointer relative transition-all hover:bg-white/[0.05] ${block.isCurrent ? 'bg-blue-600/30 border-y border-blue-400/50' : ''}`}
+                          onClick={() => viewMode === 'plan' ? openCreateModal(dayIndex, hourIndex) : null}
+                          className={`h-10 border-r border-white/5 ${viewMode === 'plan' ? 'cursor-pointer hover:bg-white/[0.05]' : ''} relative transition-all ${block.isCurrent ? 'bg-blue-600/30 border-y border-blue-400/50' : ''}`}
                         >
                           {(() => {
                             const prevDayIndex = (dayIndex - 1 + 7) % 7;
                             const dEvents = [
-                              ...events.filter(e => e.dayIndex === dayIndex).map(e => ({ ...e, realEvent: e })),
-                              ...events.filter(e => e.dayIndex === prevDayIndex && e.endMinutes > 1740).map(e => ({ ...e, id: e.id + '-w', startMinutes: 300, endMinutes: 300 + (e.endMinutes - 1740), realEvent: e }))
+                              ...displayEvents.filter(e => e.dayIndex === dayIndex).map(e => ({ ...e, realEvent: e })),
+                              ...displayEvents.filter(e => e.dayIndex === prevDayIndex && e.endMinutes > 1740).map(e => ({ ...e, id: e.id + '-w', startMinutes: 300, endMinutes: 300 + (e.endMinutes - 1740), realEvent: e }))
                             ].sort((a, b) => a.startMinutes - b.startMinutes);
                             const merged = [];
                             dEvents.forEach(e => {
@@ -775,14 +908,12 @@ const DayPlanner = () => {
                               return (
                                 <div
                                   key={e.id}
-                                  onClick={(ev) => openEditModal(e.originalEvent, ev)}
+                                  onClick={(ev) => viewMode === 'plan' ? openEditModal(e.originalEvent, ev) : ev.stopPropagation()}
                                   onContextMenu={(ev) => {
                                     ev.preventDefault();
-                                    if (e.originalEvent.isWork) {
-                                      setActiveWorkSession(e.originalEvent);
-                                    }
+                                    if (viewMode === 'plan') setActiveWorkSession(e.originalEvent);
                                   }}
-                                  className={`absolute left-0.5 right-0.5 z-10 p-1 flex items-center justify-center border border-white/10 shadow-sm transition-all hover:brightness-110 active:scale-95 ${isStart ? 'rounded-t-lg' : ''} ${isEnd ? 'rounded-b-lg' : ''} overflow-hidden cursor-pointer`}
+                                  className={`absolute left-0.5 right-0.5 z-10 p-1 flex items-center justify-center border border-white/10 shadow-sm transition-all ${viewMode === 'plan' ? 'hover:brightness-110 active:scale-95 cursor-pointer' : 'cursor-default'} ${isStart ? 'rounded-t-lg' : ''} ${isEnd ? 'rounded-b-lg' : ''} overflow-hidden`}
                                   style={{
                                     top: `${top}%`,
                                     height: `${height}%`,

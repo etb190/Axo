@@ -361,16 +361,18 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
               </button>
               {showCatDropdown && (
                 <div className="absolute top-full right-0 mt-1.5 w-48 bg-[#0c0c0c]/98 backdrop-blur-2xl border border-white/10 rounded-xl shadow-[0_16px_48px_rgba(0,0,0,0.6)] py-1.5 z-[100]">
-                  <button onClick={() => changeCat('all')} className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCat === 'all' ? 'bg-emerald-500/10 text-emerald-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
-                    <div className={`w-1.5 h-1.5 rounded-full ${selectedCat === 'all' ? 'bg-emerald-400' : 'bg-gray-600'}`} /> All
-                  </button>
-                  {categories.map(cat => (
-                    <button key={cat} onClick={() => changeCat(cat)} className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCat === cat ? 'bg-emerald-500/10 text-emerald-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
-                      <div className={`w-1.5 h-1.5 rounded-full ${selectedCat === cat ? 'bg-emerald-400' : 'bg-gray-600'}`} /> {cat}
-                      <span className="ml-auto text-[9px] font-bold text-gray-600">{articles.filter(a => a.category === cat).length}</span>
+                  <div className="overflow-y-auto custom-scrollbar max-h-[140px]">
+                    <button onClick={() => changeCat('all')} className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCat === 'all' ? 'bg-emerald-500/10 text-emerald-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
+                      <div className={`w-1.5 h-1.5 rounded-full ${selectedCat === 'all' ? 'bg-emerald-400' : 'bg-gray-600'}`} /> All
                     </button>
-                  ))}
-                  <div className="h-px bg-white/5 mx-2.5 my-1" />
+                    {categories.map(cat => (
+                      <button key={cat} onClick={() => changeCat(cat)} className={`w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[11px] font-medium transition-all cursor-pointer ${selectedCat === cat ? 'bg-emerald-500/10 text-emerald-400' : 'text-gray-400 hover:bg-white/5 hover:text-white'}`}>
+                        <div className={`w-1.5 h-1.5 rounded-full ${selectedCat === cat ? 'bg-emerald-400' : 'bg-gray-600'}`} /> {cat}
+                        <span className="ml-auto text-[9px] font-bold text-gray-600">{articles.filter(a => a.category === cat).length}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="h-px bg-white/5 mx-2.5 my-1 shrink-0" />
                   <button onClick={() => { setShowCatDropdown(false); if (onManageCategories) onManageCategories(); }} className="w-full flex items-center gap-2.5 px-3.5 py-2 text-left text-[10px] font-bold text-gray-500 hover:text-white hover:bg-white/5 transition-all cursor-pointer uppercase tracking-widest">
                     <svg className="w-3 h-3 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" /></svg>
                     Manage

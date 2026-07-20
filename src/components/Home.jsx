@@ -506,16 +506,10 @@ const Home = () => {
                     >
                         <div className="space-y-3">
                             {data.lexicon.recentWords.length > 0 ? (
-                                data.lexicon.recentWords.map((word, idx) => (
-                                    <div key={idx} className="flex justify-between items-center group/word">
-                                        <div className="text-sm font-bold text-neutral-300 group-hover/word:text-white transition-colors">
-                                            {word.basic}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <div className="h-px w-4 bg-white/10 group-hover/word:w-6 transition-all" />
-                                            <div className="text-xs font-bold text-cyan-400">
-                                                {word.advanced}
-                                            </div>
+                                data.lexicon.recentWords.slice(0, 4).map((word, idx) => (
+                                    <div key={idx} className="flex items-center group/word">
+                                        <div className="text-sm font-bold text-cyan-400 group-hover/word:text-cyan-300 transition-colors">
+                                            {word.advanced}
                                         </div>
                                     </div>
                                 ))

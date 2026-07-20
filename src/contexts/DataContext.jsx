@@ -42,6 +42,17 @@ export const DataProvider = ({ children }) => {
     const [loading, setLoading] = useState(true);
 
     const fetchAllData = async () => {
+        const processInChunks = async (items, fn, chunkSize = 50) => {
+            let results = [];
+            for (let i = 0; i < items.length; i += chunkSize) {
+                const chunk = items.slice(i, i + chunkSize);
+                const res = await Promise.all(chunk.map(fn));
+                results = results.concat(res);
+                await new Promise(r => setTimeout(r, 10)); // Yield to UI thread
+            }
+            return results;
+        };
+
         try {
             // 1. FINANCE
             let financeData = { balance: 0, income: 0, expenses: 0, fullData: { transactions: [], budgets: [], savingsGoals: [], categories: [] } };
@@ -205,7 +216,7 @@ export const DataProvider = ({ children }) => {
                         subdirs.forEach(d => allCategories.add(d.name));
 
                         // Load root-level books (category = null)
-                        const rootBooks = await Promise.all(pdfs.map(e => loadBookEntry(e.name, shelfPath, null)));
+                        const rootBooks = await processInChunks(pdfs, e => loadBookEntry(e.name, shelfPath, null));
 
                         // Load books from each subcategory folder
                         let subBooks = [];
@@ -214,7 +225,7 @@ export const DataProvider = ({ children }) => {
                             try {
                                 const catFiles = await fs.readdir(catPath);
                                 const catPdfs = catFiles.filter(f => f.toLowerCase().endsWith('.pdf'));
-                                const catBooks = await Promise.all(catPdfs.map(f => loadBookEntry(f, catPath, dir.name)));
+                                const catBooks = await processInChunks(catPdfs, f => loadBookEntry(f, catPath, dir.name));
                                 subBooks = subBooks.concat(catBooks);
                             } catch (e) { }
                         }
@@ -315,12 +326,12 @@ export const DataProvider = ({ children }) => {
                 const sessions = JSON.parse(sessionsRaw);
                 timeData.allSessions = sessions; // Store all sessions
 
-                // Fetch Planner/Tracker Tasks
+                // Fetch TimeTracker Tasks (independent from DayPlanner)
                 try {
-                     const DATA_FILE_PATH = path.join(BASE_DB, 'DayPlanner', 'tasks.json');
-                     const data = await fs.readFile(DATA_FILE_PATH, 'utf-8');
+                     const TRACKER_TASKS_PATH = path.join(BASE_DB, 'TimeTracker', 'tasks.json');
+                     const data = await fs.readFile(TRACKER_TASKS_PATH, 'utf-8');
                      const parsed = data.trim() ? JSON.parse(data) : [];
-                     timeData.workTasks = Array.isArray(parsed) ? parsed.filter(t => t.isWork) : [];
+                     timeData.workTasks = Array.isArray(parsed) ? parsed : [];
                 } catch (e) {}
 
                 const todayStr = new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0') + '-' + String(new Date().getDate()).padStart(2, '0');
@@ -404,7 +415,7 @@ export const DataProvider = ({ children }) => {
                     words.push(JSON.parse(raw));
                 }
                 lexiconData.allWords = words; // Store all words
-                lexiconData.recentWords = words.slice(0, 5);
+                lexiconData.recentWords = words.slice(0, 4);
             } catch (e) { }
 
 
@@ -550,7 +561,7 @@ export const DataProvider = ({ children }) => {
 
                         subdirs.forEach(d => articleCategories.add(d.name));
 
-                        const rootArticles = await Promise.all(pdfs.map(e => loadArticleEntry(e.name, shelfPath, null)));
+                        const rootArticles = await processInChunks(pdfs, e => loadArticleEntry(e.name, shelfPath, null));
                         const articleCacheDir = PATHS.ARTICLE_CACHE_DIR;
                         try { await fs.mkdir(articleCacheDir, { recursive: true }); } catch (e) { }
 
@@ -560,7 +571,7 @@ export const DataProvider = ({ children }) => {
                             try {
                                 const catFiles = await fs.readdir(catPath);
                                 const catPdfs = catFiles.filter(f => f.toLowerCase().endsWith('.pdf'));
-                                const catArticles = await Promise.all(catPdfs.map(f => loadArticleEntry(f, catPath, dir.name)));
+                                const catArticles = await processInChunks(catPdfs, f => loadArticleEntry(f, catPath, dir.name));
                                 subArticles = subArticles.concat(catArticles);
                             } catch (e) { }
                         }
