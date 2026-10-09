@@ -187,7 +187,7 @@ const SeriesCover = ({ series, className }) => {
     );
 };
 
-const LIBRARY_PATH = 'E:\\TV and Videos';
+const LIBRARY_PATH = 'C:\\Users\\PC\\Desktop\\Database\\TV and Videos';
 
 const SortDropdown = ({ current, onChange, className, btnClassName }) => {
     const [isOpen, setIsOpen] = useState(false);
@@ -1354,24 +1354,24 @@ const TVPlayer = ({ showNavbar = true, onViewingMedia }) => {
 
             {currentView === 'player' && selectedSeries && (
                 <div className="flex-1 relative overflow-hidden flex">
-                    <div className={`absolute top-0 bottom-0 left-0 z-50 bg-zinc-950/98 backdrop-blur-xl border-r border-zinc-800/50 w-64 shadow-2xl transition-transform duration-200 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-                        <div className="px-2 py-1.5 border-b border-zinc-800/50 flex justify-between items-center">
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <button onClick={handleBackToGrid} className="flex items-center text-zinc-500 hover:text-white transition-colors p-1 rounded-md hover:bg-zinc-800 cursor-pointer shrink-0">
+                    <div className={`absolute top-0 bottom-0 left-0 z-50 bg-zinc-950/98 backdrop-blur-xl border-r border-zinc-800/50 w-[340px] shadow-2xl transition-transform duration-200 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+                        <div className="px-3 py-2.5 border-b border-zinc-800/50 flex justify-between items-center">
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <button onClick={handleBackToGrid} className="flex items-center text-zinc-500 hover:text-white transition-colors p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer shrink-0">
                                     <img src={chevronLeftIcon} className="w-4 h-4 filter brightness-0 invert opacity-50" alt="back" />
                                 </button>
-                                <h2 className="text-xs font-bold text-white leading-tight truncate">{selectedSeries.name}</h2>
-                                <SeriesTotalStats videos={selectedSeries.videos} className="text-[9px] text-zinc-500 leading-none shrink-0" />
+                                <h2 className="text-sm font-bold text-white leading-tight truncate">{selectedSeries.name}</h2>
+                                <SeriesTotalStats videos={selectedSeries.videos} className="text-[10px] text-zinc-500 leading-none shrink-0" />
                             </div>
-                            <button onClick={() => setIsSidebarOpen(false)} className="text-zinc-600 hover:text-white p-1 cursor-pointer shrink-0">
+                            <button onClick={() => setIsSidebarOpen(false)} className="text-zinc-600 hover:text-white p-1.5 rounded-lg hover:bg-zinc-800 cursor-pointer shrink-0">
                                 <img src={closeIcon} className="w-4 h-4 filter brightness-0 invert opacity-40" alt="close" />
                             </button>
                         </div>
-                        <div className="px-1.5 py-1.5 border-b border-zinc-800/30 flex gap-1.5">
-                            <input type="text" placeholder="Filter..." value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 bg-black/40 border border-zinc-800/60 rounded-md px-2 py-1.5 text-[10px] font-medium text-white outline-none" />
-                            <SortDropdown current={sortOption} onChange={setSortOption} btnClassName="px-2 py-1.5 text-[9px]" />
+                        <div className="px-2.5 py-2 border-b border-zinc-800/30 flex gap-2">
+                            <input type="text" placeholder="Filter..." value={search} onChange={(e) => setSearch(e.target.value)} className="flex-1 bg-black/40 border border-zinc-800/60 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white outline-none placeholder:text-zinc-600 focus:border-zinc-600" />
+                            <SortDropdown current={sortOption} onChange={setSortOption} btnClassName="px-2.5 py-1.5 text-[10px] rounded-lg" />
                         </div>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-1 space-y-px">
+                        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
                             {(() => {
                                 const positions = JSON.parse(localStorage.getItem('axo_video_positions') || '{}');
                                 const lastState = JSON.parse(localStorage.getItem('axo_playback_state') || '{}');
@@ -1383,26 +1383,31 @@ const TVPlayer = ({ showNavbar = true, onViewingMedia }) => {
                                     const progress = cachedDur > 0 ? Math.min((savedPos / cachedDur) * 100, 100) : 0;
                                     const isLastWatched = video.path === lastWatchedPath;
                                     return (
-                                        <button key={index} onClick={() => handleVideoSelect(video)} className={`w-full text-left p-1 rounded-md flex items-center gap-1.5 transition-all cursor-pointer relative overflow-hidden ${currentVideo?.path === video.path ? 'bg-blue-600/15 border border-blue-600/20' : 'hover:bg-zinc-900/60 border border-transparent'}`}>
+                                        <button key={index} onClick={() => handleVideoSelect(video)} className={`w-full text-left p-2 rounded-xl flex items-center gap-3 transition-all cursor-pointer relative overflow-hidden group/item ${currentVideo?.path === video.path ? 'bg-blue-600/15 border border-blue-600/30 shadow-sm' : 'hover:bg-zinc-900/70 border border-transparent'}`}>
                                             {isLastWatched && !currentVideo && (
-                                                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[3px] h-5 bg-blue-500 rounded-l-full" />
+                                                <div className="absolute right-0 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-blue-500 rounded-l-full" />
                                             )}
-                                            <div className="w-12 aspect-video rounded-md overflow-hidden shrink-0 border border-white/5 relative bg-zinc-900">
-                                                <VideoThumbnail videoPath={video.path} className="w-full h-full opacity-80" />
-                                                {currentVideo?.path === video.path && <div className="absolute inset-0 bg-blue-600/30 flex items-center justify-center"><div className="w-1 h-1 rounded-full bg-white animate-pulse"></div></div>}
+                                            <div className="w-28 aspect-video rounded-lg overflow-hidden shrink-0 border border-white/10 relative bg-zinc-900 shadow-md group-hover/item:border-white/20 transition-all">
+                                                <VideoThumbnail videoPath={video.path} className="w-full h-full object-cover opacity-85 group-hover/item:opacity-100 transition-opacity" />
+                                                {currentVideo?.path === video.path && (
+                                                    <div className="absolute inset-0 bg-blue-600/30 flex items-center justify-center backdrop-blur-[1px]">
+                                                        <div className="w-2 h-2 rounded-full bg-white animate-pulse shadow-[0_0_8px_white]"></div>
+                                                    </div>
+                                                )}
+                                                {progress > 0 && (
+                                                    <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-black/60">
+                                                        <div className="h-full bg-blue-500 rounded-r-full transition-all" style={{ width: `${progress}%` }} />
+                                                    </div>
+                                                )}
                                             </div>
                                             <div className="min-w-0 flex-1">
-                                                <h4 className={`text-[10px] font-medium truncate leading-tight ${currentVideo?.path === video.path ? 'text-blue-400' : 'text-zinc-400'}`}>{video.name.replace(/\.[^.]+$/, '')}</h4>
-                                                <div className="flex items-center gap-1.5 leading-none mt-px">
-                                                    <VideoDuration videoPath={video.path} className="text-[9px] text-zinc-600" />
-                                                    <span className="text-[9px] text-zinc-700">{formatFileSize(video.stats?.size || 0)}</span>
+                                                <h4 className={`text-xs font-semibold leading-snug line-clamp-2 transition-colors ${currentVideo?.path === video.path ? 'text-blue-400' : 'text-zinc-300 group-hover/item:text-white'}`}>{video.name.replace(/\.[^.]+$/, '')}</h4>
+                                                <div className="flex items-center gap-1.5 leading-none mt-1.5">
+                                                    <VideoDuration videoPath={video.path} className="text-[10px] text-zinc-500 font-mono" />
+                                                    <span className="text-[10px] text-zinc-700">•</span>
+                                                    <span className="text-[10px] text-zinc-600 font-mono">{formatFileSize(video.stats?.size || 0)}</span>
                                                 </div>
                                             </div>
-                                            {progress > 0 && (
-                                                <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-zinc-800">
-                                                    <div className="h-full bg-blue-500/70 rounded-r-full transition-all" style={{ width: `${progress}%` }} />
-                                                </div>
-                                            )}
                                         </button>
                                     );
                                 });

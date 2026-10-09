@@ -261,7 +261,15 @@ const BookNotesModal = ({ bookPath, bookName, onClose, initialStartPage = '', in
         if (fs.existsSync(notesFilePath)) {
           const data = fs.readFileSync(notesFilePath, 'utf8');
           const parsed = JSON.parse(data);
-          setNotes(parsed.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+          const sorted = parsed.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          setNotes(sorted);
+          if (!initialStartPage && sorted.length > 0) {
+            const lastNote = sorted[0];
+            const defaultStart = lastNote.endPage || lastNote.startPage;
+            if (defaultStart) {
+              setStartPage(defaultStart.toString());
+            }
+          }
         } else {
           setNotes([]);
         }
@@ -274,7 +282,7 @@ const BookNotesModal = ({ bookPath, bookName, onClose, initialStartPage = '', in
     };
 
     loadNotes();
-  }, [notesFilePath]);
+  }, [notesFilePath, initialStartPage]);
 
   const saveNotes = (updatedNotes) => {
     try {
@@ -302,7 +310,7 @@ const BookNotesModal = ({ bookPath, bookName, onClose, initialStartPage = '', in
     saveNotes(updated);
     setNewNote('');
     if (mainEditor) mainEditor.commands.setContent('');
-    setStartPage('');
+    setStartPage(note.endPage || note.startPage || '');
     setEndPage('');
   };
 
@@ -567,6 +575,13 @@ const BookNotesModal = ({ bookPath, bookName, onClose, initialStartPage = '', in
                     </div>
                   ) : (
                     <div>
+                      {(note.startPage || note.endPage) && (
+                        <div className="mb-2">
+                          <span className="px-2 py-0.5 rounded bg-blue-600/10 text-blue-500 text-[9px] font-black uppercase tracking-widest border border-blue-500/10">
+                            {note.endPage && note.endPage !== note.startPage ? `pp. ${note.startPage}-${note.endPage}` : `p. ${note.startPage}`}
+                          </span>
+                        </div>
+                      )}
                       <div className="flex justify-between items-start relative z-10">
                         <div className="flex-1 pr-2">
                           <div
@@ -593,16 +608,9 @@ const BookNotesModal = ({ bookPath, bookName, onClose, initialStartPage = '', in
                         </div>
                       </div>
                       <div className="mt-2 pt-2 border-t border-zinc-800/20 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] text-zinc-700 font-bold uppercase tracking-tighter">
-                            ID: {note.id.slice(0, 6)}
-                          </span>
-                          {(note.startPage || note.endPage) && (
-                            <span className="px-2 py-0.5 rounded bg-blue-600/10 text-blue-500 text-[9px] font-black uppercase tracking-widest border border-blue-500/10">
-                              {note.endPage && note.endPage !== note.startPage ? `pp. ${note.startPage}-${note.endPage}` : `p. ${note.startPage}`}
-                            </span>
-                          )}
-                        </div>
+                        <span className="text-[9px] text-zinc-700 font-bold uppercase tracking-tighter">
+                          ID: {note.id.slice(0, 6)}
+                        </span>
                         <span className="text-[8px] text-zinc-700 font-bold uppercase">
                           {formatDate(note.timestamp)}
                         </span>

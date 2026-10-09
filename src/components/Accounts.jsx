@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Icon } from '@iconify/react';
-import { User, Mail, Lock, Shield, Phone as PhoneIcon, Search, Plus, Trash2, Edit3, Copy, X, ChevronDown, Key, History, ArrowUp, ArrowDown, Zap } from 'lucide-react';
+import { User, Mail, Lock, Shield, Phone as PhoneIcon, Search, Plus, Trash2, Edit3, Copy, X, ChevronDown, Key, History, ArrowUp, ArrowDown, Zap, Clock, RotateCcw, Check } from 'lucide-react';
 
 import Navbar from './Navbar';
 import editIcon from '../assets/icons/edit.svg';
@@ -191,18 +191,59 @@ const Accounts = () => {
         });
     };
 
-    const toggleLightningStatus = async (id) => {
-        const newAccounts = accounts.map(acc =>
-            acc.id === id ? { ...acc, lightningStatus: !acc.lightningStatus } : acc
-        );
-        setAccounts(newAccounts);
-        await saveAccounts(newAccounts);
+    // --- Live Ticker for Cooldown Countdown ---
+    const [now, setNow] = useState(Date.now());
+    useEffect(() => {
+        const interval = setInterval(() => setNow(Date.now()), 1000);
+        return () => clearInterval(interval);
+    }, []);
+
+    const getCooldownStatus = (cooldown) => {
+        if (!cooldown || !cooldown.enabled || !cooldown.endsAt) return null;
+        const endsAtMs = new Date(cooldown.endsAt).getTime();
+        const diff = endsAtMs - now;
+        if (diff <= 0) {
+            return { isReady: true, text: 'Available', diff: 0 };
+        }
+        const totalSecs = Math.floor(diff / 1000);
+        const days = Math.floor(totalSecs / 86400);
+        const hours = Math.floor((totalSecs % 86400) / 3600);
+        const minutes = Math.floor((totalSecs % 3600) / 60);
+        const seconds = totalSecs % 60;
+
+        const parts = [];
+        if (days > 0) parts.push(`${days}d`);
+        if (hours > 0 || days > 0) parts.push(`${hours}h`);
+        if (minutes > 0 || hours > 0 || days > 0) parts.push(`${minutes}m`);
+        parts.push(`${seconds}s`);
+
+        return {
+            isReady: false,
+            text: parts.join(' '),
+            diff
+        };
     };
 
-    const resetLightningStatus = async () => {
-        const newAccounts = accounts.map(acc =>
-            acc.service === "LightningAi" ? { ...acc, lightningStatus: false } : acc
-        );
+    const restartCooldown = async (id, e) => {
+        if (e) e.stopPropagation();
+        const newAccounts = accounts.map(acc => {
+            if (acc.id === id && acc.cooldown?.enabled) {
+                const d = acc.cooldown.days ?? 7;
+                const h = acc.cooldown.hours ?? 0;
+                const m = acc.cooldown.minutes ?? 0;
+                const totalMs = (d * 86400 + h * 3600 + m * 60) * 1000;
+                const currentTime = Date.now();
+                return {
+                    ...acc,
+                    cooldown: {
+                        ...acc.cooldown,
+                        startedAt: new Date(currentTime).toISOString(),
+                        endsAt: new Date(currentTime + totalMs).toISOString()
+                    }
+                };
+            }
+            return acc;
+        });
         setAccounts(newAccounts);
         await saveAccounts(newAccounts);
     };
@@ -353,13 +394,6 @@ const Accounts = () => {
             {/* Header */}
             <div className="flex items-center justify-end mb-3 shrink-0"> {/* Reduced mb-4 to mb-3 */}
                 <div className="flex items-center gap-2">
-                    <button
-                        onClick={resetLightningStatus}
-                        className="bg-zinc-900 border border-zinc-800 p-2.5 rounded-xl hover:border-emerald-500/50 hover:bg-zinc-800 transition-all active:scale-95 text-emerald-500 cursor-pointer"
-                        title="Reset all LightningAi statuses"
-                    >
-                        <Zap size={14} />
-                    </button>
                     <div className="relative group">
                         <input
                             type="text"
@@ -449,8 +483,8 @@ const Accounts = () => {
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2"> {/* Reduced gap-2.5 to gap-2 */}
                                 {catAccounts.map(account => (
                                     <div key={account.id} id={`account-${account.id}`} className="bg-zinc-900/30 border border-zinc-800/50 rounded-xl p-3.5 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all group relative"> {/* Reduced p-4 to p-3.5 */}
-                                        <div className="flex justify-between items-start mb-2.5"> {/* Reduced mb-3 to mb-2.5 */}
-                                            <div className="flex items-center gap-3">
+                                        <div className="flex justify-between items-center mb-2.5">
+                                            <div className="flex items-center gap-3 overflow-hidden min-w-0 flex-1 mr-2">
                                                 <div className="w-8 h-8 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-center text-zinc-500 font-bold text-xs shrink-0 overflow-hidden">
                                                     {account.icon ? (
                                                         iconCache[account.icon] ? (
@@ -462,7 +496,7 @@ const Accounts = () => {
                                                         account.service.charAt(0).toUpperCase()
                                                     )}
                                                 </div>
-                                                <div className="overflow-hidden flex items-center gap-2">
+                                                <div className="overflow-hidden flex items-center gap-2 min-w-0">
                                                     <h3 className="font-bold text-sm text-zinc-200 truncate">{account.service}</h3>
                                                     {account.isMotherAccount && (
                                                         <span className="px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 text-[9px] font-bold uppercase tracking-wider border border-blue-500/20 shrink-0">Main</span>
@@ -472,17 +506,14 @@ const Accounts = () => {
                                                     )}
                                                 </div>
                                             </div>
-                                            <div className="flex gap-1">
-                                                {account.service === "LightningAi" && (
+                                            <div className="flex items-center gap-1 shrink-0">
+                                                {account.cooldown?.enabled && (
                                                     <button
-                                                        onClick={(e) => {
-                                                            e.stopPropagation();
-                                                            toggleLightningStatus(account.id);
-                                                        }}
-                                                        className={`p-1.5 rounded-md transition-colors cursor-pointer ${account.lightningStatus ? 'text-red-500' : 'text-emerald-500'}`}
-                                                        title="Toggle Lightning Status"
+                                                        onClick={(e) => restartCooldown(account.id, e)}
+                                                        className="hover:bg-amber-500/20 p-1.5 rounded-md text-amber-400 hover:text-amber-300 transition-colors cursor-pointer"
+                                                        title="Restart Cooldown Timer"
                                                     >
-                                                        <Zap size={14} fill={account.lightningStatus ? "currentColor" : "none"} />
+                                                        <RotateCcw size={14} />
                                                     </button>
                                                 )}
                                                 <button onClick={() => { setDuplicatingData(null); setEditingAccount(account); setIsModalOpen(true); }} className="hover:bg-zinc-800 p-1.5 rounded-md text-zinc-500 hover:text-white transition-colors cursor-pointer" title="Edit">
@@ -496,6 +527,50 @@ const Accounts = () => {
                                                 </button>
                                             </div>
                                         </div>
+
+                                        {/* Cooldown Status Bar */}
+                                        {account.cooldown?.enabled && (() => {
+                                            const cd = getCooldownStatus(account.cooldown);
+                                            if (!cd) return null;
+                                            return cd.isReady ? (
+                                                <div
+                                                    onClick={(e) => restartCooldown(account.id, e)}
+                                                    title="Cooldown complete! Click to restart"
+                                                    className="mb-2.5 rounded-lg px-2.5 py-1.5 flex items-center justify-between bg-emerald-600 text-white border border-emerald-500 hover:bg-emerald-500 transition-all cursor-pointer select-none group/cd shadow-[0_0_12px_rgba(16,185,129,0.25)]"
+                                                >
+                                                    <div className="flex items-center gap-1.5">
+                                                        <Check size={14} className="text-white stroke-[3]" />
+                                                        <span className="text-xs font-bold uppercase tracking-wider text-white">
+                                                            Available
+                                                        </span>
+                                                    </div>
+                                                    <span className="text-[10px] text-white/80 opacity-0 group-hover/cd:opacity-100 transition-opacity whitespace-nowrap flex items-center gap-1 font-semibold">
+                                                        <RotateCcw size={11} /> Reset
+                                                    </span>
+                                                </div>
+                                            ) : (
+                                                <div
+                                                    onClick={(e) => restartCooldown(account.id, e)}
+                                                    title="Cooldown active. Click to restart timer"
+                                                    className="mb-2.5 rounded-lg px-2.5 py-1.5 flex items-center justify-between border transition-all cursor-pointer select-none group/cd bg-amber-500/10 text-amber-300 border-amber-500/25 hover:bg-amber-500/20 shadow-[0_0_10px_rgba(245,158,11,0.08)]"
+                                                >
+                                                    <div className="flex items-center gap-2">
+                                                        <Clock size={12} className="text-amber-400 animate-pulse" />
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                                                            Cooldown
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-mono font-bold tracking-tight whitespace-nowrap">
+                                                            {cd.text}
+                                                        </span>
+                                                        <span className="text-[9px] text-zinc-500 opacity-0 group-hover/cd:opacity-100 transition-opacity whitespace-nowrap">
+                                                            ↺ Restart
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
 
                                         <div className="space-y-1.5"> {/* Reduced space-y-2 to space-y-1.5 */}
                                             {/* Order: Username, Email, Phone, Password, 2FA */}
@@ -755,6 +830,12 @@ const AccountModal = ({ isOpen, onClose, initialData, isDuplicating, onSave, cat
         phone: false
     });
 
+    // Cooldown State (Default: 7 days on the dot)
+    const [cooldownEnabled, setCooldownEnabled] = useState(false);
+    const [cooldownDays, setCooldownDays] = useState(7);
+    const [cooldownHours, setCooldownHours] = useState(0);
+    const [cooldownMinutes, setCooldownMinutes] = useState(0);
+
     const [isNewCategory, setIsNewCategory] = useState(false);
 
     // Icon Search State
@@ -781,6 +862,10 @@ const AccountModal = ({ isOpen, onClose, initialData, isDuplicating, onSave, cat
                     password: !!initialData.password,
                     phone: !!initialData.phone
                 });
+                setCooldownEnabled(!!initialData.cooldown?.enabled);
+                setCooldownDays(initialData.cooldown?.days ?? 7);
+                setCooldownHours(initialData.cooldown?.hours ?? 0);
+                setCooldownMinutes(initialData.cooldown?.minutes ?? 0);
                 setIsNewCategory(false);
                 setShowIconPicker(false);
                 setIconSearch("");
@@ -790,6 +875,10 @@ const AccountModal = ({ isOpen, onClose, initialData, isDuplicating, onSave, cat
             } else {
                 setFormData({ service: '', username: '', password: '', email: '', phone: '', category: '', icon: 'lucide:shield', notes: '', isMotherAccount: false, motherAccountId: '' }); // Set default icon
                 setToggles({ username: true, email: false, password: true, phone: false }); // Pre-enable common fields for better UX
+                setCooldownEnabled(false);
+                setCooldownDays(7); // Default 7 days on the dot
+                setCooldownHours(0);
+                setCooldownMinutes(0);
                 setIsNewCategory(false);
                 setShowIconPicker(false);
                 setIconSearch("");
@@ -1084,6 +1173,62 @@ const AccountModal = ({ isOpen, onClose, initialData, isDuplicating, onSave, cat
                         )}
                     </div>
 
+                    {/* Cooldown Timer */}
+                    <div className="space-y-2 pt-3 border-t border-zinc-900/50">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <Clock size={13} className={cooldownEnabled ? 'text-amber-400' : 'text-zinc-500'} />
+                                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Cooldown</span>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setCooldownEnabled(!cooldownEnabled)}
+                                className={`w-9 h-5 rounded-full p-0.5 transition-colors cursor-pointer flex items-center ${cooldownEnabled ? 'bg-amber-500 justify-end' : 'bg-zinc-800 justify-start'}`}
+                            >
+                                <div className="w-4 h-4 rounded-full bg-white shadow-sm" />
+                            </button>
+                        </div>
+                        {cooldownEnabled && (
+                            <div className="grid grid-cols-3 gap-2 pt-1 animate-in fade-in slide-in-from-top-1 duration-150">
+                                <div>
+                                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Days</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        value={cooldownDays}
+                                        onChange={e => setCooldownDays(Math.max(0, parseInt(e.target.value) || 0))}
+                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white text-center focus:border-amber-500 outline-none font-mono"
+                                        placeholder="0"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Hours</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="23"
+                                        value={cooldownHours}
+                                        onChange={e => setCooldownHours(Math.max(0, Math.min(23, parseInt(e.target.value) || 0)))}
+                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white text-center focus:border-amber-500 outline-none font-mono"
+                                        placeholder="0"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider block mb-1">Minutes</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        max="59"
+                                        value={cooldownMinutes}
+                                        onChange={e => setCooldownMinutes(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                                        className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white text-center focus:border-amber-500 outline-none font-mono"
+                                        placeholder="0"
+                                    />
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     {/* Conditional Fields */}
                     <div className="space-y-3 animate-in fade-in duration-300">
                         {toggles.username && (
@@ -1140,6 +1285,28 @@ const AccountModal = ({ isOpen, onClose, initialData, isDuplicating, onSave, cat
                             if (!toggles.password) cleanedData.password = '';
                             if (!toggles.phone) cleanedData.phone = '';
                             if (cleanedData.isMotherAccount) cleanedData.motherAccountId = '';
+                            if (cooldownEnabled) {
+                                const d = parseInt(cooldownDays) || 0;
+                                const h = parseInt(cooldownHours) || 0;
+                                const m = parseInt(cooldownMinutes) || 0;
+                                const totalMs = (d * 86400 + h * 3600 + m * 60) * 1000;
+                                const currentTime = Date.now();
+                                const isSameDuration = initialData?.cooldown?.enabled &&
+                                    initialData.cooldown.days === d &&
+                                    initialData.cooldown.hours === h &&
+                                    initialData.cooldown.minutes === m &&
+                                    initialData.cooldown.endsAt;
+                                cleanedData.cooldown = {
+                                    enabled: true,
+                                    days: d,
+                                    hours: h,
+                                    minutes: m,
+                                    startedAt: isSameDuration ? initialData.cooldown.startedAt : new Date(currentTime).toISOString(),
+                                    endsAt: isSameDuration ? initialData.cooldown.endsAt : new Date(currentTime + totalMs).toISOString()
+                                };
+                            } else {
+                                cleanedData.cooldown = null;
+                            }
                             onSave(cleanedData);
                         }}
                         disabled={!formData.service || !formData.category} // Validation

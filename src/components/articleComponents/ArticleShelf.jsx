@@ -43,6 +43,8 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
   const [newCatInput, setNewCatInput] = useState('');
   const [showNewCatInput, setShowNewCatInput] = useState(false);
   const [showCatDropdown, setShowCatDropdown] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [editCategoryValue, setEditCategoryValue] = useState('');
   const catRef = useRef(null);
   const isReadingShelf = title === 'Currently Reading';
 
@@ -101,6 +103,7 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
       const tPath = path.join(THUMBNAIL_CACHE, tName);
       const hasThumbnail = fs.existsSync(tPath);
 
+      const createdIso = article.createdAt ? (article.createdAt instanceof Date ? article.createdAt.toISOString() : article.createdAt) : new Date().toISOString();
       const cacheData = {
         name: article.name,
         totalPages: totalPages || article.progress?.total || 0,
@@ -108,8 +111,9 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
         originalPath: article.fullPath,
         shelf: shelfKeyForCache,
         cachedAt: new Date().toISOString(),
-        createdAt: article.createdAt ? article.createdAt.toISOString() : new Date().toISOString(),
-        lastUpdated: article.lastUpdated ? article.lastUpdated.toISOString() : new Date().toISOString(),
+        addedToShelfAt: createdIso,
+        createdAt: createdIso,
+        lastUpdated: article.lastUpdated ? (article.lastUpdated instanceof Date ? article.lastUpdated.toISOString() : article.lastUpdated) : new Date().toISOString(),
         category: article.category || null
       };
 
@@ -222,7 +226,31 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
       try { storedTotal = JSON.parse(fs.readFileSync(pFile, 'utf-8')).total || 0; } catch { }
     }
     const clamped = storedTotal > 0 ? Math.max(0, Math.min(currentPage, storedTotal)) : Math.max(0, currentPage);
-    try { fs.writeFileSync(pFile, JSON.stringify({ current: clamped, total: storedTotal }, null, 2)); refreshData(); } catch { }
+    const previousCurrent = progressData[article.fullPath]?.current || 0;
+    const pagesRead = clamped - previousCurrent;
+
+    try { 
+        fs.writeFileSync(pFile, JSON.stringify({ current: clamped, total: storedTotal }, null, 2)); 
+
+        if (pagesRead !== 0) {
+            const BASE_DB = 'C:\\Users\\PC\\Desktop\\database';
+            const LOGS_FILE = path.join(BASE_DB, 'Books', 'reading_logs.json');
+            let logs = [];
+            if (fs.existsSync(LOGS_FILE)) {
+              logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
+            }
+            logs.push({
+              id: crypto.randomUUID(),
+              bookName: article.name,
+              bookPath: article.fullPath,
+              pages: pagesRead,
+              date: new Date().toISOString()
+            });
+            fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
+        }
+
+        refreshData(); 
+    } catch { }
     setProgressData(prev => ({ ...prev, [article.fullPath]: { ...prev[article.fullPath], current: clamped, total: storedTotal } }));
   };
 
@@ -251,30 +279,163 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
 
   const moveArticle = (article, targetKey, targetCat) => {
     try {
-      const cat = targetCat === '__root__' ? null : targetCat;
+      const cat = targetCat === undefined ? (article.category || null) : (targetCat === '__root__' ? null : targetCat);
+      const nowIso = new Date().toISOString();
+      if (article.cachedOnly) {
+        const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, article.name + '.json');
+        if (fs.existsSync(cacheFilePath)) {
+          try {
+            const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+            cacheData.shelf = targetKey;
+            cacheData.category = cat;
+            cacheData.addedToShelfAt = nowIso;
+            cacheData.createdAt = nowIso;
+            fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+          } catch (e) {}
+        }
+        refreshData();
+        setMoveModal(null);
+        setMoveTargetCat(article.category || '__root__');
+        if (typeof setContextMenu === 'function') setContextMenu(null);
+        return;
+      }
       const fileName = path.basename(article.fullPath);
       const targetDir = cat ? path.join(BASE_ARTICLES, targetKey, cat) : path.join(BASE_ARTICLES, targetKey);
       if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
       const targetPath = path.join(targetDir, fileName);
       if (fs.existsSync(targetPath)) { alert('Article already exists there.'); return; }
       fs.renameSync(article.fullPath, targetPath);
+
+      const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, article.name + '.json');
+      let cacheData = {};
+      if (fs.existsSync(cacheFilePath)) {
+        try { cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8')); } catch (e) {}
+      }
+      cacheData.name = article.name;
+      cacheData.shelf = targetKey;
+      cacheData.originalPath = targetPath;
+      cacheData.category = cat;
+      cacheData.addedToShelfAt = nowIso;
+      cacheData.createdAt = nowIso;
+      cacheData.lastUpdated = nowIso;
+      fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+
       refreshData();
       setMoveModal(null);
       setMoveTargetCat(article.category || '__root__');
     } catch (err) { console.error('Error moving article:', err); }
   };
 
+  const deleteCategoryGlobally = (catName) => {
+    try {
+      const BASE_ARTICLES = 'C:\\Users\\PC\\Desktop\\database\\Articles';
+      const shelfKeysList = ['Reading', 'WanttoRead', 'Read'];
+      shelfKeysList.forEach((key) => {
+        const catPath = path.join(BASE_ARTICLES, key, catName);
+        if (fs.existsSync(catPath)) {
+          const files = fs.readdirSync(catPath);
+          files.forEach(file => {
+            const oldPath = path.join(catPath, file);
+            const newPath = path.join(BASE_ARTICLES, key, file);
+            fs.renameSync(oldPath, newPath);
+            if (file.toLowerCase().endsWith('.pdf')) {
+              const articleName = path.basename(file, '.pdf');
+              const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, articleName + '.json');
+              if (fs.existsSync(cacheFilePath)) {
+                try {
+                  const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+                  cacheData.originalPath = newPath;
+                  cacheData.category = null;
+                  fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+                } catch(e){}
+              }
+            }
+          });
+          fs.rmdirSync(catPath);
+        }
+      });
+      refreshData();
+    } catch (err) {
+      console.error('Error deleting category:', err);
+    }
+  };
+
+  const editCategoryGlobally = (oldCatName, newCatName) => {
+    if (!newCatName || newCatName === oldCatName) {
+      setEditingCategory(null);
+      return;
+    }
+    try {
+      const BASE_ARTICLES = 'C:\\Users\\PC\\Desktop\\database\\Articles';
+      const shelfKeysList = ['Reading', 'WanttoRead', 'Read'];
+      shelfKeysList.forEach((key) => {
+        const oldCatPath = path.join(BASE_ARTICLES, key, oldCatName);
+        const newCatPath = path.join(BASE_ARTICLES, key, newCatName);
+        if (fs.existsSync(oldCatPath)) {
+          if (!fs.existsSync(newCatPath)) fs.mkdirSync(newCatPath, { recursive: true });
+          const files = fs.readdirSync(oldCatPath);
+          files.forEach(file => {
+            const oldPath = path.join(oldCatPath, file);
+            const newPath = path.join(newCatPath, file);
+            fs.renameSync(oldPath, newPath);
+            if (file.toLowerCase().endsWith('.pdf')) {
+              const articleName = path.basename(file, '.pdf');
+              const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, articleName + '.json');
+              if (fs.existsSync(cacheFilePath)) {
+                try {
+                  const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+                  cacheData.originalPath = newPath;
+                  cacheData.category = newCatName;
+                  fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+                } catch(e){}
+              }
+            }
+          });
+          fs.rmdirSync(oldCatPath);
+        }
+      });
+      refreshData();
+      setEditingCategory(null);
+    } catch (err) {
+      console.error('Error editing category:', err);
+    }
+  };
+
   const changeCategoryForArticle = (article, newCat) => {
     try {
       const cat = newCat === '__root__' ? null : newCat;
+      if (article.cachedOnly) {
+        const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, article.name + '.json');
+        if (fs.existsSync(cacheFilePath)) {
+          try {
+            const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+            cacheData.category = cat;
+            fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+          } catch (e) {}
+        }
+        refreshData();
+        setCategoryModal(null);
+        return;
+      }
       const fileName = path.basename(article.fullPath);
-      const curShelf = shelfKeys.find(s => article.fullPath.includes(`\\${s.key}\\`))?.key || 'Reading';
+      const curShelf = shelfKeys.find(s => article.fullPath.includes(`\\${s.key}\\`) || article.fullPath.includes(`/${s.key}/`))?.key || 'Reading';
       const targetDir = cat ? path.join(BASE_ARTICLES, curShelf, cat) : path.join(BASE_ARTICLES, curShelf);
       if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
       const targetPath = path.join(targetDir, fileName);
       if (article.fullPath === targetPath) { setCategoryModal(null); return; }
       if (fs.existsSync(targetPath)) { alert('Already exists there.'); return; }
       fs.renameSync(article.fullPath, targetPath);
+
+      const cacheFilePath = path.join(ARTICLE_CACHE_FOLDER, article.name + '.json');
+      if (fs.existsSync(cacheFilePath)) {
+        try {
+          const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+          cacheData.originalPath = targetPath;
+          cacheData.category = cat;
+          fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+        } catch (e) {}
+      }
+
       refreshData();
       setCategoryModal(null);
     } catch (err) { console.error(err); }
@@ -535,56 +696,34 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
 
       {/* Move Modal */}
       {moveModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setMoveModal(null); setMoveTargetCat(moveModal?.category || '__root__'); } }}>
-          <div className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-md w-full border border-white/10" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-bold text-white mb-1 text-center">Move Article</h3>
-            <p className="text-xs text-gray-500 text-center mb-6 truncate max-w-[280px] mx-auto">{moveModal.name}</p>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4 animate-in fade-in duration-300" onMouseDown={(e) => { if (e.target === e.currentTarget) { setMoveModal(null); setMoveTargetCat(moveModal?.category || '__root__'); } }}>
+          <div className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300" onClick={e => e.stopPropagation()}>
+            <div className="flex flex-col items-center text-center mb-4">
+              <div className="w-8 h-8 rounded-2xl bg-emerald-600/20 flex items-center justify-center border border-emerald-500/20 mb-1">
+                <img src={MoveIcon} className="w-4 h-4" style={{ filter: 'brightness(0) invert(1)' }} />
+              </div>
+              <h3 className="text-xl font-bold text-white mb-2">Move Article</h3>
+              <p className="text-sm text-gray-500 max-w-[200px] line-clamp-2">{moveModal.name}</p>
+            </div>
             <div className="space-y-3">
               <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Shelf</label>
               <div className="grid gap-2">
                 {shelfKeys.map(shelf => {
-                  const isActive = moveModal.fullPath.includes(`\\${shelf.key}\\`) && moveTargetCat === (moveModal.category || '__root__');
+                  const isActive = moveModal.fullPath
+                    ? (moveModal.fullPath.includes(`\\${shelf.key}\\`) || moveModal.fullPath.includes(`/${shelf.key}/`))
+                    : (moveModal.shelf === shelf.key);
                   return (
-                    <button key={shelf.key} disabled={isActive} onClick={() => moveArticle(moveModal, shelf.key, moveTargetCat)}
+                    <button key={shelf.key} disabled={isActive} onClick={() => moveArticle(moveModal, shelf.key, moveModal.category || '__root__')}
                       className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${isActive ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
                       <div className="flex items-center gap-3">
                         <div className={`w-2 h-2 rounded-full ${isActive ? 'bg-gray-500' : 'bg-emerald-500'}`} />
                         <span className={`text-sm font-semibold ${isActive ? 'text-gray-500' : 'text-white'}`}>{shelf.title}</span>
                       </div>
-                      {isActive ? <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span> : <img src={CheckIcon} className="w-4 h-4 opacity-0 group-hover:opacity-40 transition-opacity invert" />}
+                      {isActive ? <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter">Current</span> : <img src={CheckIcon} className="w-4 h-4 opacity-0 group-hover:opacity-40 transition-opacity invert" />}
                     </button>
                   );
                 })}
               </div>
-              {/* Category selection for move */}
-              {categories.length > 0 && (
-                <div className="space-y-2 mt-4">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
-                  <div className="flex flex-wrap gap-1.5 p-1">
-                    <button
-                      onClick={() => setMoveTargetCat('__root__')}
-                      className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCat === '__root__'
-                        ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                        : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
-                        }`}
-                    >
-                      None
-                    </button>
-                    {categories.map(cat => (
-                      <button
-                        key={cat}
-                        onClick={() => setMoveTargetCat(cat)}
-                        className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCat === cat
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                          : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
-                          }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
             <div className="mt-8">
               <button onClick={() => { setMoveModal(null); setMoveTargetCat(moveModal?.category || '__root__'); }} className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95">Cancel</button>
@@ -592,82 +731,170 @@ const ArticleShelf = ({ title, shelfKey, articles = [], categories = [], onManag
           </div>
         </div>
       )}
-
-      {/* Category Modal */}
+        {/* Category Modal */}
       {categoryModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) { setCategoryModal(null) } }}>
-          <div className="bg-[#0f0f0f] rounded-[1.5rem] p-5 max-w-[300px] w-full border border-white/10 flex flex-col max-h-[85vh]" onClick={e => e.stopPropagation()}>
-            <div className="flex flex-col items-center text-center mb-3">
-              <h3 className="text-base font-bold text-white mb-0.5">Change Category</h3>
-              <p className="text-[10px] text-gray-500 max-w-[200px] line-clamp-1">{categoryModal.name}</p>
-            </div>
-            <div className="grid gap-1.5 overflow-y-auto pr-1 max-h-[320px] custom-scrollbar">
-              <button onClick={() => changeCategoryForArticle(categoryModal, '__root__')} disabled={!categoryModal.category}
-                className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${!categoryModal.category ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
-                <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className="text-xs font-semibold">Uncategorized</span></div>
-                {!categoryModal.category && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
-              </button>
-              {categories.map(cat => (
-                <button key={cat} onClick={() => changeCategoryForArticle(categoryModal, cat)} disabled={categoryModal.category === cat}
-                  className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${categoryModal.category === cat ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed' : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'}`}>
-                  <div className="flex items-center gap-3"><div className={`w-2 h-2 rounded-full ${categoryModal.category === cat ? 'bg-gray-500' : 'bg-emerald-400'}`} /><span className="text-xs font-semibold">{cat}</span></div>
-                  {categoryModal.category === cat && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
-                </button>
-              ))}
-
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[400] p-4 animate-in fade-in duration-300"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) { setCategoryModal(null) } }}
+        >
+          <div
+            className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center mb-4">
+              <h3 className="text-xl font-bold text-white">Change Category</h3>
             </div>
 
-            {/* Create new category */}
-            <div className="mt-3 pt-3 border-t border-white/5">
-              {showNewCatInput ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={newCatInput}
-                    onChange={(e) => setNewCatInput(e.target.value)}
-                    placeholder="Category name..."
-                    className="flex-1 bg-white/5 text-white text-xs font-medium rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 border border-white/5 transition-all placeholder:text-white/20"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newCatInput.trim()) {
-                        changeCategoryForArticle(categoryModal, newCatInput.trim());
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                      if (e.key === 'Escape') {
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={() => {
-                      if (newCatInput.trim()) {
-                        changeCategoryForArticle(categoryModal, newCatInput.trim());
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                    }}
-                    disabled={!newCatInput.trim()}
-                    className="px-3 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
-                  >
-                    Add
-                  </button>
-                </div>
-              ) : (
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
+              <div className="grid gap-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
                 <button
-                  onClick={() => setShowNewCatInput(true)}
-                  className="group flex items-center gap-2.5 p-2.5 rounded-lg border border-dashed border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
+                  onClick={() => changeCategoryForArticle(categoryModal, '__root__')}
+                  disabled={!categoryModal.category}
+                  className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${!categoryModal.category
+                    ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                    : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'
+                    }`}
                 >
-                  <div className="w-5 h-5 rounded-md bg-emerald-500/20 flex items-center justify-center">
-                    <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                  <div className="flex items-center gap-3">
+                    <div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-emerald-400'}`} />
+                    <span className={`text-sm font-semibold ${!categoryModal.category ? 'text-gray-500' : 'text-white'}`}>Uncategorized</span>
                   </div>
-                  <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
+                  {!categoryModal.category && <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter">Current</span>}
                 </button>
-              )}
+
+                {categories.map(cat => {
+                  const isCurrent = categoryModal.category === cat;
+                  return (
+                    <div key={cat} className="group relative w-full">
+                      {editingCategory === cat ? (
+                        <div className="flex items-center gap-1.5 w-full p-3 rounded-2xl border bg-white/[0.02] border-white/5">
+                          <input
+                            type="text"
+                            value={editCategoryValue}
+                            onChange={(e) => setEditCategoryValue(e.target.value)}
+                            className="flex-1 w-full min-w-0 bg-white/5 text-white text-xs font-medium rounded-xl px-3 py-2 focus:outline-none focus:ring-1 focus:ring-emerald-500/50 border border-white/5"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') editCategoryGlobally(cat, editCategoryValue.trim());
+                              if (e.key === 'Escape') setEditingCategory(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => editCategoryGlobally(cat, editCategoryValue.trim())}
+                            className="p-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white transition-all cursor-pointer flex-shrink-0"
+                            title="Save"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                          </button>
+                          <button
+                            onClick={() => setEditingCategory(null)}
+                            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer flex-shrink-0"
+                            title="Cancel"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => {
+                            if (!isCurrent) {
+                              changeCategoryForArticle(categoryModal, cat);
+                            }
+                          }}
+                          className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${isCurrent
+                            ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                            : 'bg-white/[0.02] border-white/5 hover:border-emerald-500/40 hover:bg-emerald-500/5 cursor-pointer active:scale-[0.98]'
+                            }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-gray-500' : 'bg-emerald-400'}`} />
+                            <span className={`text-sm font-semibold ${isCurrent ? 'text-gray-500' : 'text-white'}`}>{cat}</span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            {isCurrent && <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter mr-1 group-hover:hidden">Current</span>}
+
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditingCategory(cat); setEditCategoryValue(cat); }}
+                              className="p-1.5 rounded-lg hover:bg-blue-500/20 text-gray-400 hover:text-blue-400 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+                              title="Edit"
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteCategoryGlobally(cat); }}
+                              className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+                              title="Delete"
+                            >
+                              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-70" style={{ filter: 'brightness(0) invert(1)' }} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Create new category */}
+              <div className="pt-1">
+                {showNewCatInput ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newCatInput}
+                      onChange={(e) => setNewCatInput(e.target.value)}
+                      placeholder="Category name..."
+                      className="flex-1 bg-white/5 text-white text-xs font-medium rounded-2xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newCatInput.trim()) {
+                          changeCategoryForArticle(categoryModal, newCatInput.trim());
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                        if (e.key === 'Escape') {
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        if (newCatInput.trim()) {
+                          changeCategoryForArticle(categoryModal, newCatInput.trim());
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                      }}
+                      disabled={!newCatInput.trim()}
+                      className="px-4 py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowNewCatInput(true)}
+                    className="group flex items-center gap-3 p-4 rounded-2xl border border-dashed border-white/10 hover:border-emerald-500/40 hover:bg-emerald-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
+                  >
+                    <div className="w-5 h-5 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                      <svg className="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="mt-4">
-              <button onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); }} className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-semibold text-gray-500 cursor-pointer transition-all active:scale-95">Cancel</button>
+
+            <div className="mt-8">
+              <button
+                onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); setEditingCategory(null); }}
+                className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>

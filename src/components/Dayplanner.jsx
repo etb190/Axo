@@ -72,7 +72,7 @@ const DayPlanner = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [showClearDayModal, setShowClearDayModal] = useState(false);
   const [dayToClear, setDayToClear] = useState(null);
-  const [selectedDuration, setSelectedDuration] = useState('');
+  const [selectedDuration, setSelectedDuration] = useState('0.5');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [activeWorkSession, setActiveWorkSession] = useState(null);
   const [viewMode, setViewMode] = useState(() => {
@@ -105,6 +105,15 @@ const DayPlanner = () => {
       setCurrentTime(new Date());
     }, 1000); // Update every second for countdown
     return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setTimeout(() => {
+      const el = document.getElementById('current-time-block');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }, 100);
   }, []);
 
 
@@ -146,6 +155,25 @@ const DayPlanner = () => {
       return null;
     }
     return hh * 60 + mm;
+  };
+
+  const parseFlexibleTimeToMinutes = (timeStr) => {
+    if (!timeStr || typeof timeStr !== 'string') return null;
+    const trimmed = timeStr.trim();
+    if (trimmed.includes(':')) {
+      const parts = trimmed.split(':');
+      const hh = parseInt(parts[0], 10);
+      const mm = parts[1] === '' ? 0 : parseInt(parts[1], 10);
+      if (!isNaN(hh) && hh >= 0 && hh < 30 && !isNaN(mm) && mm >= 0 && mm < 60) {
+        return hh * 60 + mm;
+      }
+    } else {
+      const hh = parseInt(trimmed, 10);
+      if (!isNaN(hh) && hh >= 0 && hh < 30) {
+        return hh * 60;
+      }
+    }
+    return null;
   };
 
   const formatMinutesToTime = (minutes) => {
@@ -337,12 +365,13 @@ const DayPlanner = () => {
     }
 
     const displayHour = clickedActualHour % 24;
-    const nextDisplayHour = (clickedActualHour + 1) % 24;
+    const dur = selectedDuration || '0.5';
+    const durMins = Math.round(parseFloat(dur) * 60);
 
     setStartTime(formatMinutesToTime(startMins));
-    setEndTime(formatMinutesToTime(hrEnd));
+    setEndTime(formatMinutesToTime(startMins + durMins));
     setSelectedDays([dayIndex]);
-    setSelectedDuration('');
+    setSelectedDuration(dur);
     setShowTaskSelector(true);
   };
 
@@ -352,8 +381,12 @@ const DayPlanner = () => {
     setTaskName(event.taskName);
     setStartTime(formatMinutesToTime(event.startMinutes));
     setEndTime(formatMinutesToTime(event.endMinutes));
-    setTaskName(event.taskName);
-    setSelectedDuration('');
+
+    const durMinutes = event.endMinutes - event.startMinutes;
+    const durHours = durMinutes / 60;
+    const supportedDurations = ['0.25', '0.5', '0.75', '1', '1.5', '2', '3', '4'];
+    const matchedDur = supportedDurations.find(d => Math.abs(parseFloat(d) - durHours) < 0.01);
+    setSelectedDuration(matchedDur || '0.5');
 
     const matchingEvents = events.filter(ev =>
       ev.taskName === event.taskName &&
@@ -366,13 +399,40 @@ const DayPlanner = () => {
   };
 
   const handleDurationChange = (duration) => {
-    setSelectedDuration(duration);
-    if (duration && startTime) {
-      const startMin = parseTimeToMinutes(startTime);
+    const nextDur = duration || '0.5';
+    setSelectedDuration(nextDur);
+    if (nextDur && startTime) {
+      const startMin = parseFlexibleTimeToMinutes(startTime);
       if (startMin !== null) {
-        const durationMinutes = parseFloat(duration) * 60;
+        const durationMinutes = parseFloat(nextDur) * 60;
         const endMin = startMin + durationMinutes;
         setEndTime(formatMinutesToTime(endMin));
+      }
+    }
+  };
+
+  const handleStartTimeChange = (newStartTime) => {
+    setStartTime(newStartTime);
+    const startMin = parseFlexibleTimeToMinutes(newStartTime);
+    if (startMin !== null) {
+      const dur = selectedDuration || '0.5';
+      const durationMinutes = parseFloat(dur) * 60;
+      const endMin = startMin + durationMinutes;
+      setEndTime(formatMinutesToTime(endMin));
+    }
+  };
+
+  const handleEndTimeChange = (newEndTime) => {
+    setEndTime(newEndTime);
+    const startM = parseFlexibleTimeToMinutes(startTime);
+    const endM = parseFlexibleTimeToMinutes(newEndTime);
+    if (startM !== null && endM !== null && endM > startM) {
+      const durMinutes = endM - startM;
+      const durHours = durMinutes / 60;
+      const supportedDurations = ['0.25', '0.5', '0.75', '1', '1.5', '2', '3', '4'];
+      const matchedDur = supportedDurations.find(d => Math.abs(parseFloat(d) - durHours) < 0.01);
+      if (matchedDur) {
+        setSelectedDuration(matchedDur);
       }
     }
   };
@@ -390,7 +450,7 @@ const DayPlanner = () => {
     setShowClearDayModal(false);
     setDayToClear(null);
     setErrorMessage('');
-    setSelectedDuration('');
+    if (!selectedDuration) setSelectedDuration('0.5');
   };
 
   const toggleDay = (dayIndex) => {
@@ -562,6 +622,68 @@ const DayPlanner = () => {
     closeModals();
   };
 
+  const resolveDayOverlaps = (fixedEvent, otherEventsOnDay) => {
+    let beforeEvents = [];
+    let afterEvents = [];
+
+    otherEventsOnDay.forEach(ev => {
+      const clone = { ...ev };
+      if (clone.startMinutes < fixedEvent.startMinutes) {
+        beforeEvents.push(clone);
+      } else {
+        afterEvents.push(clone);
+      }
+    });
+
+    // 1. Process beforeEvents (events starting before fixedEvent)
+    // Sort descending by startMinutes so we process the closest one to fixedEvent first
+    beforeEvents.sort((a, b) => b.startMinutes - a.startMinutes);
+    let currentUpperBound = fixedEvent.startMinutes;
+
+    const finalBefore = [];
+    for (let ev of beforeEvents) {
+      if (ev.endMinutes > currentUpperBound) {
+        // Overlap detected! Push up
+        const duration = ev.endMinutes - ev.startMinutes;
+        const newStart = currentUpperBound - duration;
+        if (newStart >= 0) {
+          ev.endMinutes = currentUpperBound;
+          ev.startMinutes = newStart;
+          currentUpperBound = ev.startMinutes;
+          finalBefore.push(ev);
+        } else {
+          // No room above (would be negative time), push down into afterEvents instead
+          afterEvents.push(ev);
+        }
+      } else {
+        currentUpperBound = Math.min(currentUpperBound, ev.startMinutes);
+        finalBefore.push(ev);
+      }
+    }
+
+    // 2. Process afterEvents (events starting at or after fixedEvent, plus any displaced beforeEvents)
+    // Sort ascending by startMinutes
+    afterEvents.sort((a, b) => a.startMinutes - b.startMinutes);
+    let currentLowerBound = fixedEvent.endMinutes;
+
+    const finalAfter = [];
+    for (let ev of afterEvents) {
+      const duration = ev.endMinutes - ev.startMinutes;
+      if (ev.startMinutes < currentLowerBound) {
+        // Overlap detected! Push down
+        ev.startMinutes = currentLowerBound;
+        ev.endMinutes = ev.startMinutes + duration;
+        currentLowerBound = ev.endMinutes;
+      } else {
+        currentLowerBound = Math.max(currentLowerBound, ev.endMinutes);
+      }
+      finalAfter.push(ev);
+    }
+
+    // Return all events for this day, sorted ascending by startMinutes
+    return [...finalBefore, fixedEvent, ...finalAfter].sort((a, b) => a.startMinutes - b.startMinutes);
+  };
+
   const saveEvent = () => {
     if (!taskName.trim() || selectedDays.length === 0) return;
 
@@ -582,35 +704,43 @@ const DayPlanner = () => {
 
     if (endMin <= startMin) endMin += 1440;
 
-    const task = savedTasks.find(t => t.name === taskName);
-    const newEvents = selectedDays.map(dayIndex => {
-      // Try to preserve ID if we are editing the same day
-      let id = Date.now() + dayIndex;
-      if (editingEvent && editingEvent.dayIndex === dayIndex) {
-        id = editingEvent.id;
-      }
+    const task = savedTasks.find(t => t.name.trim().toLowerCase() === taskName.trim().toLowerCase());
 
-      return {
-        id,
-        dayIndex,
-        startMinutes: startMin,
-        endMinutes: endMin,
-        taskName: taskName.trim(),
-        color: task ? task.color : '#2563eb',
-        isWork: task ? task.isWork : false
-      };
-    });
-
-    let updated = events.filter(ev => {
+    // Filter out the event(s) being edited so they don't collide with themselves
+    let remainingEvents = events.filter(ev => {
       if (editingEvent) {
         return !(ev.taskName === editingEvent.taskName && ev.startMinutes === editingEvent.startMinutes && ev.endMinutes === editingEvent.endMinutes);
       }
       return true;
     });
 
-    updated = [...updated, ...newEvents];
-    setEvents(updated);
-    saveEvents(updated);
+    let allUpdatedEvents = [...remainingEvents];
+
+    selectedDays.forEach(dayIndex => {
+      let id = Date.now() + dayIndex;
+      if (editingEvent && editingEvent.dayIndex === dayIndex) {
+        id = editingEvent.id;
+      }
+
+      const newEv = {
+        id,
+        dayIndex,
+        startMinutes: startMin,
+        endMinutes: endMin,
+        taskName: task ? task.name : taskName.trim(),
+        color: task ? task.color : '#2563eb',
+        isWork: task ? task.isWork : false
+      };
+
+      const dayEvents = allUpdatedEvents.filter(e => e.dayIndex === dayIndex);
+      const otherDayEvents = allUpdatedEvents.filter(e => e.dayIndex !== dayIndex);
+
+      const resolvedDayEvents = resolveDayOverlaps(newEv, dayEvents);
+      allUpdatedEvents = [...otherDayEvents, ...resolvedDayEvents];
+    });
+
+    setEvents(allUpdatedEvents);
+    saveEvents(allUpdatedEvents);
     closeModals();
   };
 
@@ -685,6 +815,14 @@ const DayPlanner = () => {
     return `${m}m`;
   };
 
+  const formatDuration = (totalMinutes) => {
+    const h = Math.floor(totalMinutes / 60);
+    const m = Math.round(totalMinutes % 60);
+    if (h > 0 && m > 0) return `${h}h ${m}m`;
+    if (h > 0) return `${h}h`;
+    return `${m}m`;
+  };
+
   const { currentTask, nextTask, currentMinutes, accurateMinutes } = getCurrentAndNextTask();
 
   if (activeWorkSession) {
@@ -700,8 +838,11 @@ const DayPlanner = () => {
           setTaskName(ev.taskName);
           setStartTime(formatMinutesToTime(ev.startMinutes));
           setEndTime(formatMinutesToTime(ev.endMinutes));
-          setEndTime(formatMinutesToTime(ev.endMinutes));
-          setSelectedDuration('');
+          const durMinutes = ev.endMinutes - ev.startMinutes;
+          const durHours = durMinutes / 60;
+          const supportedDurations = ['0.25', '0.5', '0.75', '1', '1.5', '2', '3', '4'];
+          const matchedDur = supportedDurations.find(d => Math.abs(parseFloat(d) - durHours) < 0.01);
+          setSelectedDuration(matchedDur || '0.5');
           const matchingEvents = events.filter(e =>
             e.taskName === ev.taskName &&
             e.startMinutes === ev.startMinutes &&
@@ -830,7 +971,7 @@ const DayPlanner = () => {
                       <th
                         key={day}
                         onClick={(e) => handleDayHeaderClick(idx, e)}
-                        className={`px-2 py-2 text-center transition-all cursor-pointer group/day hover:bg-white/[0.04] ${isToday ? 'bg-white/[0.02]' : ''} border-r border-white/5`}
+                        className={`px-2 py-2 text-center transition-all cursor-pointer group/day hover:bg-white/[0.04] ${isToday ? 'bg-blue-500/[0.09] border-x border-blue-400/30' : ''} border-r border-white/5`}
                       >
                         <div className="flex flex-col items-center gap-0.5">
                           <span className={`text-[8px] font-bold uppercase tracking-[0.3em] ${isToday ? 'text-blue-500' : 'text-zinc-600'}`}>
@@ -847,10 +988,10 @@ const DayPlanner = () => {
               </thead>
               <tbody>
                 {timeBlocks.map((block, hourIndex) => (
-                  <tr key={hourIndex} className="group border-b border-white/[0.03]">
-                    <td className={`w-20 h-10 px-3 text-[10px] font-bold sticky left-0 z-20 backdrop-blur-md border-r border-white/5 transition-all font-mono ${block.isCurrent ? 'bg-white/5 text-white' : 'bg-black/95 text-zinc-600'}`}>
+                  <tr key={hourIndex} id={block.isCurrent ? "current-time-block" : undefined} className="group border-b border-white/[0.03]">
+                    <td className={`w-20 h-10 px-3 text-[10px] font-bold sticky left-0 z-20 backdrop-blur-md border-r border-white/5 transition-all font-mono ${block.isCurrent ? 'bg-blue-500/[0.09] text-blue-400 border-y border-blue-400/30' : 'bg-black/95 text-zinc-600'}`}>
                       <div className="flex items-center gap-2">
-                        {block.isCurrent && <div className="w-1 h-1 bg-white rounded-full animate-pulse"></div>}
+                        {block.isCurrent && <div className="w-1 h-1 bg-blue-400 rounded-full animate-pulse"></div>}
                         {block.label}
                       </div>
                     </td>
@@ -860,7 +1001,7 @@ const DayPlanner = () => {
                         <td
                           key={dayIndex}
                           onClick={() => viewMode === 'plan' ? openCreateModal(dayIndex, hourIndex) : null}
-                          className={`h-10 border-r border-white/5 ${viewMode === 'plan' ? 'cursor-pointer hover:bg-white/[0.05]' : ''} relative transition-all ${block.isCurrent ? 'bg-blue-600/30 border-y border-blue-400/50' : ''}`}
+                          className={`h-10 border-r border-white/5 ${viewMode === 'plan' ? 'cursor-pointer hover:bg-white/[0.05]' : ''} relative transition-all ${block.isCurrent && isToday ? 'bg-blue-500/[0.18] border border-blue-400/30' : block.isCurrent ? 'bg-blue-500/[0.09] border-y border-blue-400/30' : isToday ? 'bg-blue-500/[0.09] border-x border-blue-400/30' : ''}`}
                         >
                           {(() => {
                             const prevDayIndex = (dayIndex - 1 + 7) % 7;
@@ -913,7 +1054,7 @@ const DayPlanner = () => {
                                     ev.preventDefault();
                                     if (viewMode === 'plan') setActiveWorkSession(e.originalEvent);
                                   }}
-                                  className={`absolute left-0.5 right-0.5 z-10 p-1 flex items-center justify-center border border-white/10 shadow-sm transition-all ${viewMode === 'plan' ? 'hover:brightness-110 active:scale-95 cursor-pointer' : 'cursor-default'} ${isStart ? 'rounded-t-lg' : ''} ${isEnd ? 'rounded-b-lg' : ''} overflow-hidden`}
+                                  className={`absolute left-0.5 right-0.5 ${height <= 60 ? 'z-20' : 'z-10'} p-1 flex items-center justify-center border border-white/10 shadow-sm transition-all ${viewMode === 'plan' ? 'hover:brightness-110 active:scale-95 cursor-pointer' : 'cursor-default'} ${isStart ? 'rounded-t-lg' : ''} ${isEnd ? 'rounded-b-lg' : ''} ${height <= 60 ? 'overflow-visible' : 'overflow-hidden'}`}
                                   style={{
                                     top: `${top}%`,
                                     height: `${height}%`,
@@ -921,17 +1062,26 @@ const DayPlanner = () => {
                                     boxShadow: isRunning ? `0 0 15px ${e.color}33` : 'none'
                                   }}
                                 >
-                                  {isStart && height > 30 && (
-                                    <div className="flex flex-col items-center justify-center w-full px-1">
-                                      <span className="text-[9px] font-bold text-white truncate shadow-black/20 text-shadow">
-                                        {e.taskName}
-                                      </span>
-                                      {height > 60 && (
-                                        <span className="text-[7px] font-bold text-white/80 font-mono mt-0.5">
-                                          {((e.originalEvent.endMinutes - e.originalEvent.startMinutes) / 60).toFixed(1)}h
+                                  {isStart && (
+                                    height > 60 ? (
+                                      <div className="flex flex-col items-center justify-center w-full px-1">
+                                        <span className="text-[9px] font-bold text-white truncate shadow-black/20 text-shadow">
+                                          {e.taskName}
                                         </span>
-                                      )}
-                                    </div>
+                                        <span className="text-[7px] font-bold text-white/80 font-mono mt-0.5">
+                                          {formatDuration(e.originalEvent.endMinutes - e.originalEvent.startMinutes)}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center justify-center w-full px-1 gap-1 overflow-hidden">
+                                        <span className="text-[8px] font-bold text-white truncate whitespace-nowrap">
+                                          {e.taskName}
+                                        </span>
+                                        <span className="text-[8px] font-bold text-white/70 whitespace-nowrap">
+                                          — {formatDuration(e.originalEvent.endMinutes - e.originalEvent.startMinutes)}
+                                        </span>
+                                      </div>
+                                    )
                                   )}
                                 </div>
                               );
@@ -958,7 +1108,7 @@ const DayPlanner = () => {
               <>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-bold text-white uppercase tracking-wider">Select Task</h3>
-                  <button onClick={closeModals} className="text-zinc-500 hover:text-white cursor-pointer"><LocalIcon src={closeIcon} size={18} className="text-zinc-500 hover:text-white" /></button>
+                  <button onClick={() => { if (editingEvent) { setShowTaskSelector(false); setShowEventModal(true); } else { closeModals(); } }} className="text-zinc-500 hover:text-white cursor-pointer"><LocalIcon src={closeIcon} size={18} className="text-zinc-500 hover:text-white" /></button>
                 </div>
                 <div className="grid grid-cols-2 gap-1.5 max-h-[300px] overflow-y-auto custom-scrollbar pr-1 mb-4">
                   {savedTasks.map((t, i) => (
@@ -987,45 +1137,68 @@ const DayPlanner = () => {
                   <button onClick={closeModals} className="text-zinc-500 hover:text-white cursor-pointer"><LocalIcon src={closeIcon} size={18} className="text-zinc-500" /></button>
                 </div>
                 <div className="space-y-5">
-                  <div className="p-3 bg-white/[0.03] border border-white/5 rounded-xl">
-                    <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Task</label>
-                    <input
-                      type="text"
-                      value={taskName}
-                      onChange={(e) => setTaskName(e.target.value)}
-                      className="w-full bg-transparent text-xs font-bold text-white outline-none placeholder:text-zinc-600"
-                      placeholder="Task name..."
-                    />
+                  <div 
+                    onClick={() => {
+                      setShowEventModal(false);
+                      setShowTaskSelector(true);
+                    }}
+                    className="p-3 bg-white/[0.03] border border-white/5 rounded-xl flex items-center justify-between cursor-pointer hover:bg-white/[0.06] hover:border-white/15 transition-all group"
+                    title="Click to select or change task"
+                  >
+                    <div>
+                      <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Task</label>
+                      <div className="flex items-center gap-2">
+                        {(() => {
+                          const matched = savedTasks.find(t => t.name.toLowerCase() === taskName.trim().toLowerCase());
+                          return matched ? (
+                            <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: matched.color }} />
+                          ) : null;
+                        })()}
+                        <span className="text-xs font-bold text-white tracking-tight">{taskName || 'Select a task...'}</span>
+                      </div>
+                    </div>
+                    <span className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 group-hover:text-white transition-colors bg-white/5 group-hover:bg-white/10 px-2 py-1 rounded-md border border-white/5">
+                      Change
+                    </span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Start</label>
-                      <input type="text" value={startTime} onChange={(e) => setStartTime(e.target.value)} onClick={handleTimeClick} className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono font-bold text-white focus:border-blue-500 outline-none transition-all" />
+                      <input type="text" value={startTime} onChange={(e) => handleStartTimeChange(e.target.value)} onClick={handleTimeClick} className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono font-bold text-white focus:border-blue-500 outline-none transition-all" />
                     </div>
                     <div>
                       <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">End</label>
-                      <input type="text" value={endTime} onChange={(e) => setEndTime(e.target.value)} onClick={handleTimeClick} className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono font-bold text-white focus:border-blue-500 outline-none transition-all" />
+                      <input type="text" value={endTime} onChange={(e) => handleEndTimeChange(e.target.value)} onClick={handleTimeClick} className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs font-mono font-bold text-white focus:border-blue-500 outline-none transition-all" />
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Quick Duration</label>
-                    <select
-                      value={selectedDuration}
-                      onChange={(e) => handleDurationChange(e.target.value)}
-                      className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-3 py-2 text-xs font-bold text-white focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer"
-                    >
-                      <option value="" className="bg-zinc-950">Manual / Custom</option>
-                      <option value="0.25" className="bg-zinc-950">15 Minutes</option>
-                      <option value="0.5" className="bg-zinc-950">30 Minutes</option>
-                      <option value="0.75" className="bg-zinc-950">45 Minutes</option>
-                      <option value="1" className="bg-zinc-950">1 Hour</option>
-                      <option value="1.5" className="bg-zinc-950">1.5 Hours</option>
-                      <option value="2" className="bg-zinc-950">2 Hours</option>
-                      <option value="3" className="bg-zinc-950">3 Hours</option>
-                      <option value="4" className="bg-zinc-950">4 Hours</option>
-                    </select>
+                    <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-1">Duration</label>
+                    <div className="flex gap-1">
+                      {[
+                        { value: '0.25', label: '15m' },
+                        { value: '0.5', label: '30m' },
+                        { value: '0.75', label: '45m' },
+                        { value: '1', label: '1h' },
+                        { value: '1.5', label: '1h30' },
+                        { value: '2', label: '2h' },
+                        { value: '3', label: '3h' },
+                        { value: '4', label: '4h' },
+                      ].map(d => (
+                        <button
+                          key={d.value}
+                          onClick={() => handleDurationChange(d.value)}
+                          className={`flex-1 h-7 rounded-lg text-[9px] font-bold transition-all border cursor-pointer ${
+                            selectedDuration === d.value
+                              ? 'bg-white text-black border-white'
+                              : 'bg-white/5 text-zinc-400 border-white/5 hover:border-white/20 hover:text-white'
+                          }`}
+                        >
+                          {d.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
 
                   <div>
@@ -1106,7 +1279,7 @@ const DayPlanner = () => {
                 <div className="space-y-6">
                   <div className="text-center">
                     <label className="text-[7px] font-bold text-zinc-500 uppercase tracking-widest block mb-2">Shutdown Time</label>
-                    <input type="text" value={sleepStart} onChange={(e) => setSleepStart(e.target.value)} onClick={handleTimeClick} className="w-full bg-transparent border-b border-white/10 py-2 text-2xl font-mono font-bold text-white text-center focus:border-white outline-none transition-all" />
+                    <input type="text" value={sleepStart} onChange={(e) => { setSleepStart(e.target.value); localStorage.setItem('sleepStart', e.target.value); }} onClick={handleTimeClick} className="w-full bg-transparent border-b border-white/10 py-2 text-2xl font-mono font-bold text-white text-center focus:border-white outline-none transition-all" />
                   </div>
                   <div className="bg-white/[0.02] border border-white/5 rounded-xl p-4 text-center">
                     <span className="text-[8px] font-bold text-zinc-500 uppercase tracking-widest mb-1 block">Countdown</span>

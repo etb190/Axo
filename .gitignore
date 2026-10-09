@@ -99,5 +99,6 @@ src/assets/icon_active.png
 scratch/
 .agents/
 *.tmp
+*.timestamp-*.mjs
 icons_list.txt
 scan_icons.py

@@ -6,9 +6,7 @@ import WorkflowCanvas from './WorkflowCanvas';
 import GoalsIcon from '../assets/icons/goals.svg';
 import BrainIcon from '../assets/icons/brain.svg';
 import RoadmapIcon from '../assets/icons/chart.svg';
-import TrainingIcon from '../assets/icons/zap.svg';
 import Navbar from './Navbar';
-import SkillsTraining from './VoiceTraining';
 import { useData } from '../contexts/DataContext';
 
 const STORAGE_KEY = 'axo_growth_last_view';
@@ -19,7 +17,7 @@ const GrowthParent = () => {
     const [currentView, setCurrentView] = useState(() => {
         if (view) return view;
         try { return localStorage.getItem(STORAGE_KEY) || 'goals'; } catch { return 'goals'; }
-    }); // 'goals', 'skills', 'roadmap', 'training'
+    }); // 'goals', 'skills', 'roadmap'
     const [isTransitioning, setIsTransitioning] = useState(false);
 
     useEffect(() => {
@@ -84,18 +82,6 @@ const GrowthParent = () => {
                     <img src={RoadmapIcon} className={`w-3.5 h-3.5 ${currentView === 'roadmap' ? 'invert' : ''}`} alt="" />
                     <span>Roadmap</span>
                 </button>
-
-                <div className="w-[1px] h-3 bg-white/10 mx-1"></div>
-                <button
-                    onClick={() => switchView('training')}
-                    className={`flex items-center gap-2 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider transition-all duration-300 cursor-pointer ${currentView === 'training'
-                        ? 'bg-white text-black shadow-lg scale-100'
-                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-white/5'
-                        }`}
-                >
-                    <img src={TrainingIcon} className={`w-3.5 h-3.5 ${currentView === 'training' ? 'invert' : ''}`} alt="" />
-                    <span>Training</span>
-                </button>
             </div>
 
             {/* Main Container - True Black */}
@@ -112,7 +98,6 @@ const GrowthParent = () => {
                     {currentView === 'goals' && <Goals showNavbar={false} />}
                     {currentView === 'skills' && <Skills showNavbar={false} />}
                     {currentView === 'roadmap' && <WorkflowCanvas showNavbar={false} />}
-                    {currentView === 'training' && <SkillsTraining />}
                 </div>
             </div>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useData } from '../contexts/DataContext';
 import Navbar from './Navbar';
@@ -44,6 +44,7 @@ const fs = window.require('fs');
 const { readdir, writeFile, readFile, unlink, stat } = fs.promises;
 const { readdirSync, readFileSync, existsSync } = fs;
 const path = window.require('path');
+const { shell } = window.require('electron');
 
 import * as pdfjsLib from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
@@ -54,12 +55,69 @@ const BOOK_WANT_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Books\\WanttoRead';
 const BOOK_READ_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Books\\Read';
 const BOOK_THUMBNAIL_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Books\\ThumbnailCache';
 const BOOK_PROGRESS_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Books\\Progress';
+const BOOK_CACHE_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Books\\BookCache';
 
 const ARTICLE_READING_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Reading';
 const ARTICLE_WANT_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\WanttoRead';
 const ARTICLE_READ_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Read';
 const ARTICLE_THUMBNAIL_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\ThumbnailCache';
 const ARTICLE_PROGRESS_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\Progress';
+const ARTICLE_CACHE_PATH = 'C:\\Users\\PC\\Desktop\\database\\Articles\\ArticleCache';
+
+const findPdfPath = (itemData) => {
+    if (itemData?.path && fs.existsSync(itemData.path)) {
+        return itemData.path;
+    }
+    const title = itemData?.title;
+    if (!title) return null;
+
+    const dirs = itemData.dbType === 'article'
+        ? [ARTICLE_READING_PATH, ARTICLE_WANT_PATH, ARTICLE_READ_PATH]
+        : [BOOK_READING_PATH, BOOK_WANT_PATH, BOOK_READ_PATH];
+
+    const searchRecursively = (dir, fileName) => {
+        if (!fs.existsSync(dir)) return null;
+        try {
+            const items = fs.readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+                const full = path.join(dir, item.name);
+                if (item.isDirectory()) {
+                    const found = searchRecursively(full, fileName);
+                    if (found) return found;
+                } else if (item.name.toLowerCase() === fileName.toLowerCase()) {
+                    return full;
+                }
+            }
+        } catch (e) { }
+        return null;
+    };
+
+    for (const d of dirs) {
+        const found = searchRecursively(d, `${title}.pdf`);
+        if (found) return found;
+    }
+    return null;
+};
+
+const openBookOrDoc = (itemData) => {
+    try {
+        const pdfPath = findPdfPath(itemData);
+        if (pdfPath) {
+            shell.openPath(pdfPath);
+        } else if (itemData?.path) {
+            shell.openPath(itemData.path);
+        } else {
+            console.warn('Could not locate PDF file for:', itemData?.title);
+        }
+    } catch (err) {
+        console.error('Error opening PDF:', err);
+    }
+};
+
+const capitalizeFirst = (str) => {
+    if (!str) return str;
+    return str.charAt(0).toUpperCase() + str.slice(1);
+};
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -77,15 +135,30 @@ const getFileAsBase64 = (filePath) => {
     }
 };
 
-const readBookMeta = (bookName, progressPath = BOOK_PROGRESS_PATH) => {
+const readBookMeta = (bookName, progressPath = BOOK_PROGRESS_PATH, dbType = 'book') => {
+    let current = 0;
+    let pages = null;
     try {
         const progressFile = path.join(progressPath, `${bookName}.json`);
         if (fs.existsSync(progressFile)) {
             const parsed = JSON.parse(fs.readFileSync(progressFile, 'utf-8'));
-            return { current: parsed.current || 0, pages: parsed.pages || null };
+            current = parsed.current || 0;
+            pages = parsed.pages || parsed.total || parsed.totalPages || null;
         }
     } catch (err) { }
-    return { current: 0, pages: null };
+
+    if (!pages) {
+        try {
+            const cacheFolder = dbType === 'article' ? ARTICLE_CACHE_PATH : BOOK_CACHE_PATH;
+            const cacheFile = path.join(cacheFolder, `${bookName}.json`);
+            if (fs.existsSync(cacheFile)) {
+                const parsedCache = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+                pages = parsedCache.totalPages || parsedCache.total || parsedCache.pages || null;
+            }
+        } catch (err) { }
+    }
+
+    return { current, pages };
 };
 
 const LocalCover = ({ path: thumbPath, pdfPath, className }) => {
@@ -119,7 +192,7 @@ const LocalCover = ({ path: thumbPath, pdfPath, className }) => {
                     canvas.height = viewport.height;
                     await page.render({ canvasContext: context, viewport }).promise;
                     const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                    
+
                     if (!active) return;
                     setSrc(dataUrl);
 
@@ -151,8 +224,46 @@ const LocalCover = ({ path: thumbPath, pdfPath, className }) => {
     return <img src={src} className={className} alt="" />;
 };
 
-const readBookProgress = (bookName, progressPath = BOOK_PROGRESS_PATH) => {
-    return readBookMeta(bookName, progressPath).current;
+const readBookProgress = (bookName, progressPath = BOOK_PROGRESS_PATH, dbType = 'book', totalPages = null) => {
+    const meta = readBookMeta(bookName, progressPath);
+    let current = meta.current || 0;
+
+    const readDir = dbType === 'article' ? ARTICLE_READ_PATH : BOOK_READ_PATH;
+
+    const searchRecursively = (dir, fileName) => {
+        if (!fs.existsSync(dir)) return false;
+        try {
+            const items = fs.readdirSync(dir, { withFileTypes: true });
+            for (const item of items) {
+                if (item.isDirectory()) {
+                    if (searchRecursively(path.join(dir, item.name), fileName)) return true;
+                } else if (item.name.toLowerCase() === fileName.toLowerCase()) {
+                    return true;
+                }
+            }
+        } catch (e) { }
+        return false;
+    };
+
+    if (searchRecursively(readDir, `${bookName}.pdf`)) {
+        return totalPages || meta.pages || current;
+    }
+
+    return current;
+};
+
+const getPdfTotalPages = async (pdfPath) => {
+    if (!pdfPath) return 0;
+    try {
+        if (!fs.existsSync(pdfPath)) return 0;
+        const data = await readFile(pdfPath);
+        pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+        const pdf = await pdfjsLib.getDocument({ data }).promise;
+        return pdf.numPages || 0;
+    } catch (e) {
+        console.error('Failed to get PDF pages for:', pdfPath, e);
+        return 0;
+    }
 };
 
 const writeBookProgress = async (bookName, currentPage, progressPath = BOOK_PROGRESS_PATH) => {
@@ -160,7 +271,7 @@ const writeBookProgress = async (bookName, currentPage, progressPath = BOOK_PROG
         const progressFile = path.join(progressPath, `${bookName}.json`);
         let existing = {};
         try { if (existsSync(progressFile)) existing = JSON.parse(readFileSync(progressFile, 'utf-8')); } catch { }
-        await writeFile(progressFile, JSON.stringify({ ...existing, current: currentPage }), 'utf-8');
+        await writeFile(progressFile, JSON.stringify({ ...existing, current: currentPage, total: existing.total || existing.pages }), 'utf-8');
     } catch (err) {
         console.error(`Error writing progress for ${bookName}:`, err);
     }
@@ -171,7 +282,7 @@ const cacheBookPages = async (bookName, pages, progressPath = BOOK_PROGRESS_PATH
         const progressFile = path.join(progressPath, `${bookName}.json`);
         let existing = {};
         try { if (existsSync(progressFile)) existing = JSON.parse(readFileSync(progressFile, 'utf-8')); } catch { }
-        await writeFile(progressFile, JSON.stringify({ ...existing, pages }), 'utf-8');
+        await writeFile(progressFile, JSON.stringify({ ...existing, pages, total: pages }), 'utf-8');
     } catch (err) { }
 };
 
@@ -180,7 +291,7 @@ const Modal = ({ isOpen, onClose, title, children }) => {
     if (!isOpen) return null;
     return (
         <div className="sk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="sk-modal sk-modal--sm">
+            <div className="sk-modal sk-modal--sm">
                 <div className="sk-modal__head">
                     <span className="sk-modal__title">{title}</span>
                     <button onClick={onClose} className="sk-icon-btn">
@@ -233,7 +344,7 @@ const LessonModal = ({ isOpen, onClose, lesson, phases, initialPhaseId, onSave, 
 
     return (
         <div className="sk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="sk-modal sk-modal--md">
+            <div className="sk-modal sk-modal--md">
                 <div className="sk-modal__head">
                     <div>
                         <span className="sk-modal__title">{lesson ? (isEditing ? 'Edit Note' : 'View Note') : 'Log Note'}</span>
@@ -307,12 +418,37 @@ const LessonModal = ({ isOpen, onClose, lesson, phases, initialPhaseId, onSave, 
 };
 
 // ─── BOOK ITEM ────────────────────────────────────────────────────────────────
-const BookItem = ({ data, onUpdate, onDelete }) => {
+const BookItem = ({ data, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) => {
+    useEffect(() => {
+        if (!data.pages || data.pages === 0) {
+            let active = true;
+            const resolvePages = async () => {
+                const pdfPath = data.path || findPdfPath(data);
+                if (pdfPath) {
+                    const pages = await getPdfTotalPages(pdfPath);
+                    if (pages > 0 && active) {
+                        onUpdate({ pages, path: pdfPath });
+                        if (data.title && data.progressPath) {
+                            cacheBookPages(data.title, pages, data.progressPath);
+                        }
+                    }
+                }
+            };
+            resolvePages();
+            return () => { active = false; };
+        }
+    }, [data.pages, data.title, data.path]);
+
     const percent = data.pages > 0 ? Math.round((data.currentPage / data.pages) * 100) : 0;
+    const isRead = data.shelf?.toLowerCase() === 'read' || percent >= 100;
     return (
-        <div className="sk-item sk-item--book group">
-            <div className="sk-item__cover-wrap">
-                <img src={data.cover} alt="cover" className="sk-item__cover" />
+        <div className={`sk-item sk-item--book group ${isRead ? 'sk-item--book-read' : ''}`}>
+            <div
+                className="sk-item__cover-wrap"
+                onClick={() => openBookOrDoc(data)}
+                title={`Click to open "${data.title}" in default PDF viewer`}
+            >
+                <LocalCover path={data.cover} pdfPath={data.path} className="sk-item__cover" />
                 <div className="sk-item__cover-overlay">
                     <span className="sk-item__cover-label">{data.pages}p</span>
                 </div>
@@ -325,45 +461,100 @@ const BookItem = ({ data, onUpdate, onDelete }) => {
                             {data.dbType === 'article' ? 'Article' : 'Literature'}
                         </p>
                     </div>
-                    <button onClick={onDelete} className="sk-icon-btn sk-icon-btn--delete group-hover:opacity-100">
-                        <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
-                    </button>
-                </div>
-                <div className="sk-progress">
-                    <div className="sk-progress__track">
-                        <div className={`sk-progress__fill ${data.dbType === 'article' ? 'sk-progress__fill--emerald' : 'sk-progress__fill--orange'}`} style={{ width: `${percent}%` }} />
-                    </div>
-                    <span className={`sk-progress__label ${data.dbType === 'article' ? 'sk-progress__label--emerald' : 'sk-progress__label--orange'}`}>{percent}%</span>
-                </div>
-                <div className="sk-item__controls">
-                    <span className="sk-label">Page</span>
-                    <div className="sk-num-input">
-                        <input
-                            type="number"
-                            className="sk-num-input__field"
-                            value={data.currentPage}
-                            onChange={(e) => onUpdate(Math.min(parseInt(e.target.value) || 0, data.pages))}
-                        />
-                        <span className="sk-num-input__max">/ {data.pages}</span>
-                    </div>
-                    <div className="sk-dot-row group-hover:opacity-100">
-                        {[...Array(5)].map((_, i) => (
-                            <div key={i} className={`sk-dot ${i / 5 < percent / 100 ? (data.dbType === 'article' ? 'sk-dot--active-emerald' : 'sk-dot--active-orange') : ''}`} />
-                        ))}
+                    <div className="flex items-center gap-0.5">
+                        <button
+                            onClick={onMoveUp}
+                            disabled={isFirst}
+                            title="Move up"
+                            className={`sk-icon-btn ${isFirst ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <div style={{ transform: 'rotate(180deg)', display: 'flex' }}>
+                                <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                            </div>
+                        </button>
+                        <button
+                            onClick={onMoveDown}
+                            disabled={isLast}
+                            title="Move down"
+                            className={`sk-icon-btn ${isLast ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                        </button>
+                        <button onClick={onDelete} title="Delete item" className="sk-icon-btn sk-icon-btn--delete group-hover:opacity-100">
+                            <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
+                        </button>
                     </div>
                 </div>
+                {isRead ? (
+                    <div className="sk-book-read-badge mt-2 mb-1">
+                        <LocalIcon src={checkIcon} size={12} className="sk-icon--emerald" />
+                        <span>Read</span>
+                    </div>
+                ) : (
+                    <>
+                        <div className="sk-progress">
+                            <div className="sk-progress__track">
+                                <div className={`sk-progress__fill ${data.dbType === 'article' ? 'sk-progress__fill--emerald' : 'sk-progress__fill--orange'}`} style={{ width: `${percent}%` }} />
+                            </div>
+                            <span className={`sk-progress__label ${data.dbType === 'article' ? 'sk-progress__label--emerald' : 'sk-progress__label--orange'}`}>{percent}%</span>
+                        </div>
+                        <div className="sk-item__controls">
+                            <span className="sk-label">Page</span>
+                            <div className="sk-num-input">
+                                <input
+                                    type="number"
+                                    className="sk-num-input__field"
+                                    value={data.currentPage}
+                                    onChange={(e) => onUpdate(Math.min(parseInt(e.target.value) || 0, data.pages))}
+                                    onFocus={(e) => e.target.select()}
+                                />
+                                <span className="sk-num-input__max">/ {data.pages}</span>
+                            </div>
+                            <div className="sk-dot-row group-hover:opacity-100">
+                                {[...Array(5)].map((_, i) => (
+                                    <div key={i} className={`sk-dot ${i / 5 < percent / 100 ? (data.dbType === 'article' ? 'sk-dot--active-emerald' : 'sk-dot--active-orange') : ''}`} />
+                                ))}
+                            </div>
+                        </div>
+                    </>
+                )}
             </div>
         </div>
     );
 };
 
 // ─── DOCUMENT ITEM ────────────────────────────────────────────────────────────
-const DocumentItem = ({ data, onUpdate, onDelete }) => {
+const DocumentItem = ({ data, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) => {
+    useEffect(() => {
+        if (!data.pages || data.pages === 0) {
+            let active = true;
+            const resolvePages = async () => {
+                const pdfPath = data.path || findPdfPath(data);
+                if (pdfPath) {
+                    const pages = await getPdfTotalPages(pdfPath);
+                    if (pages > 0 && active) {
+                        onUpdate({ pages, path: pdfPath });
+                        if (data.title && data.progressPath) {
+                            cacheBookPages(data.title, pages, data.progressPath);
+                        }
+                    }
+                }
+            };
+            resolvePages();
+            return () => { active = false; };
+        }
+    }, [data.pages, data.title, data.path]);
+
     const percent = data.pages > 0 ? Math.round((data.currentPage / data.pages) * 100) : 0;
+    const isRead = data.shelf?.toLowerCase() === 'read' || percent >= 100;
     return (
-        <div className="sk-item sk-item--doc group">
-            <div className="sk-item__cover-wrap">
-                <img src={data.cover} alt="cover" className="sk-item__cover" />
+        <div className={`sk-item sk-item--doc group ${isRead ? 'sk-item--doc-read' : ''}`}>
+            <div
+                className="sk-item__cover-wrap"
+                onClick={() => openBookOrDoc(data)}
+                title={`Click to open "${data.title}" in default PDF viewer`}
+            >
+                <LocalCover path={data.cover} pdfPath={data.path} className="sk-item__cover" />
                 <div className="sk-item__cover-overlay">
                     <span className="sk-item__cover-label">{data.pages}p</span>
                 </div>
@@ -374,37 +565,69 @@ const DocumentItem = ({ data, onUpdate, onDelete }) => {
                         <h4 className="sk-item__title">{data.title}</h4>
                         <p className="sk-item__type sk-item__type--doc">Document</p>
                     </div>
-                    <button onClick={onDelete} className="sk-icon-btn sk-icon-btn--delete group-hover:opacity-100">
-                        <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
-                    </button>
-                </div>
-                <div className="sk-progress">
-                    <div className="sk-progress__track">
-                        <div className="sk-progress__fill sk-progress__fill--blue" style={{ width: `${percent}%` }} />
+                    <div className="flex items-center gap-0.5">
+                        <button
+                            onClick={onMoveUp}
+                            disabled={isFirst}
+                            title="Move up"
+                            className={`sk-icon-btn ${isFirst ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <div style={{ transform: 'rotate(180deg)', display: 'flex' }}>
+                                <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                            </div>
+                        </button>
+                        <button
+                            onClick={onMoveDown}
+                            disabled={isLast}
+                            title="Move down"
+                            className={`sk-icon-btn ${isLast ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                        </button>
+                        <button onClick={onDelete} title="Delete item" className="sk-icon-btn sk-icon-btn--delete group-hover:opacity-100">
+                            <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
+                        </button>
                     </div>
-                    <span className="sk-progress__label sk-progress__label--blue">{percent}%</span>
                 </div>
-                <div className="sk-item__controls">
-                    <span className="sk-label">Progress</span>
-                    <div className="sk-num-input">
-                        <input
-                            type="number"
-                            className="sk-num-input__field"
-                            value={data.currentPage}
-                            onChange={(e) => onUpdate(Math.min(parseInt(e.target.value) || 0, data.pages))}
-                        />
-                        <span className="sk-num-input__max">/ {data.pages}</span>
+                {isRead ? (
+                    <div className="sk-book-read-badge mt-2 mb-1">
+                        <LocalIcon src={checkIcon} size={12} className="sk-icon--emerald" />
+                        <span>Read</span>
                     </div>
-                </div>
+                ) : (
+                    <>
+                        <div className="sk-progress">
+                            <div className="sk-progress__track">
+                                <div className="sk-progress__fill sk-progress__fill--blue" style={{ width: `${percent}%` }} />
+                            </div>
+                            <span className="sk-progress__label sk-progress__label--blue">{percent}%</span>
+                        </div>
+                        <div className="sk-item__controls">
+                            <span className="sk-label">Progress</span>
+                            <div className="sk-num-input">
+                                <input
+                                    type="number"
+                                    className="sk-num-input__field"
+                                    value={data.currentPage}
+                                    onChange={(e) => onUpdate(Math.min(parseInt(e.target.value) || 0, data.pages))}
+                                    onFocus={(e) => e.target.select()}
+                                />
+                                <span className="sk-num-input__max">/ {data.pages}</span>
+                            </div>
+                        </div>
+                    </>
+                )}
             </div>
         </div>
     );
 };
 
 // ─── TASK ITEM ────────────────────────────────────────────────────────────────
-const TaskItem = ({ data, onUpdate, onDelete }) => {
+const TaskItem = ({ data, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editValue, setEditValue] = useState(data.text || '');
     return (
-        <div className="sk-item sk-item--task group">
+        <div className={`sk-item sk-item--task group ${data.completed ? 'sk-item--task-done' : ''}`}>
             <div className="sk-checkbox-wrap">
                 <input
                     type="checkbox"
@@ -417,27 +640,91 @@ const TaskItem = ({ data, onUpdate, onDelete }) => {
                 )}
             </div>
             <div className="sk-item__body">
-                <span className={`sk-task-text ${data.completed ? 'sk-task-text--done' : ''}`}>{data.text}</span>
-                <p className="sk-item__type sk-item__type--task">Task</p>
+                <span className="sk-item__type sk-item__type--task" style={{ margin: 0, display: 'block' }}>Task</span>
+                {isEditing ? (
+                    <input
+                        className="sk-input"
+                        value={editValue}
+                        onChange={e => setEditValue(capitalizeFirst(e.target.value))}
+                        onBlur={() => { onUpdate({ text: editValue }); setIsEditing(false); }}
+                        onKeyDown={e => { if (e.key === 'Enter') { onUpdate({ text: editValue }); setIsEditing(false); } if (e.key === 'Escape') setIsEditing(false); }}
+                        autoFocus
+                        onFocus={e => e.target.select()}
+                    />
+                ) : (
+                    <span
+                        className={`sk-task-text sk-task-text--editable ${data.completed ? 'sk-task-text--done' : ''}`}
+                        onClick={() => { setIsEditing(true); setEditValue(data.text || ''); }}
+                        title="Click to rename"
+                        style={{ cursor: 'pointer' }}
+                    >
+                        {data.text}
+                    </span>
+                )}
             </div>
-            <button onClick={onDelete} className="sk-icon-btn sk-icon-btn--delete">
-                <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
-            </button>
+            <div className="sk-item__actions group-hover:opacity-100 opacity-60 transition-opacity" style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
+                <button
+                    onClick={onMoveUp}
+                    disabled={isFirst}
+                    title="Move up"
+                    className={`sk-icon-btn ${isFirst ? 'opacity-20 cursor-not-allowed' : ''}`}
+                >
+                    <div style={{ transform: 'rotate(180deg)', display: 'flex' }}>
+                        <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                    </div>
+                </button>
+                <button
+                    onClick={onMoveDown}
+                    disabled={isLast}
+                    title="Move down"
+                    className={`sk-icon-btn ${isLast ? 'opacity-20 cursor-not-allowed' : ''}`}
+                >
+                    <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                </button>
+                <button onClick={onDelete} title="Delete task" className="sk-icon-btn sk-icon-btn--delete">
+                    <LocalIcon src={trashIcon} size={13} className="sk-icon sk-icon--delete" />
+                </button>
+            </div>
         </div>
     );
 };
 
 // ─── COUNTER ITEM ─────────────────────────────────────────────────────────────
-const CounterItem = ({ data, onUpdate, onDelete }) => {
+const CounterItem = ({ data, onUpdate, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) => {
+    const [isEditing, setIsEditing] = useState(false);
+    const [editValue, setEditValue] = useState(data.name || '');
     const isHours = data.type === 'hours';
     const percent = data.target > 0 ? Math.round((data.current / data.target) * 100) : 0;
+    const isDone = percent >= 100;
 
     return (
-        <div className={`sk-item sk-item--counter group ${isHours ? 'sk-item--counter-purple' : ''}`}>
+        <div className={`sk-item sk-item--counter group ${isHours ? 'sk-item--counter-purple' : ''} ${isDone ? 'sk-item--counter-done' : ''}`}>
             <div className="sk-item__body">
                 <div className="sk-counter__row">
                     <div className="sk-counter__info">
-                        <span className="sk-item__type" style={{ color: isHours ? 'var(--purple)' : 'var(--blue)', opacity: 0.7 }}>{isHours ? 'Hours' : 'Count'}</span>
+                        <span className="sk-item__type" style={{ color: isHours ? 'var(--purple)' : 'var(--blue)', opacity: 0.7, marginBottom: '2px', display: 'block' }}>{isHours ? 'Hours' : 'Count'}</span>
+                        {isEditing ? (
+                            <input
+                                className="sk-input"
+                                value={editValue}
+                                onChange={e => setEditValue(capitalizeFirst(e.target.value))}
+                                onBlur={() => { onUpdate({ name: editValue }); setIsEditing(false); }}
+                                onKeyDown={e => { if (e.key === 'Enter') { onUpdate({ name: editValue }); setIsEditing(false); } if (e.key === 'Escape') setIsEditing(false); }}
+                                autoFocus
+                                onFocus={e => e.target.select()}
+                            />
+                        ) : (
+                            data.name && (
+                                <div
+                                    className="sk-task-text"
+                                    style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-1)', marginBottom: '2px', cursor: 'pointer' }}
+                                    onClick={() => { setIsEditing(true); setEditValue(data.name || ''); }}
+                                    title="Click to rename"
+                                >
+                                    {data.name}
+                                </div>
+                            )
+                        )}
                         <div className="sk-counter__value">
                             <span className="sk-counter__num">{data.current}</span>
                             <span className="sk-counter__max">/{data.target}</span>
@@ -445,17 +732,41 @@ const CounterItem = ({ data, onUpdate, onDelete }) => {
                     </div>
                     <div className="sk-counter__actions">
                         <button
-                            onClick={() => onUpdate(data.current + 1)}
+                            onClick={onMoveUp}
+                            disabled={isFirst}
+                            title="Move up"
+                            className={`sk-icon-btn ${isFirst ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <div style={{ transform: 'rotate(180deg)', display: 'flex' }}>
+                                <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                            </div>
+                        </button>
+                        <button
+                            onClick={onMoveDown}
+                            disabled={isLast}
+                            title="Move down"
+                            className={`sk-icon-btn ${isLast ? 'opacity-20 cursor-not-allowed' : 'opacity-60 hover:opacity-100'}`}
+                        >
+                            <LocalIcon src={chevronDownIcon} size={11} className="sk-icon" />
+                        </button>
+                        <button
+                            onClick={() => onUpdate({ current: data.current + 1 })}
                             className={`sk-counter__inc-sm ${isHours ? 'sk-counter__inc--purple' : 'sk-counter__inc--blue'}`}
                         >
                             <LocalIcon src={plusIcon} size={12} className="sk-icon--white" />
                         </button>
-                        <button onClick={onDelete} className="sk-icon-btn sk-icon-btn--delete">
+                        <button onClick={onDelete} title="Delete metric" className="sk-icon-btn sk-icon-btn--delete">
                             <LocalIcon src={trashIcon} size={12} className="sk-icon sk-icon--delete" />
                         </button>
                     </div>
                 </div>
-                <div className="sk-progress sk-progress--sm">
+                {isDone && (
+                    <div className="sk-book-read-badge mt-2 mb-1">
+                        <LocalIcon src={checkIcon} size={12} className="sk-icon--emerald" />
+                        <span>Completed</span>
+                    </div>
+                )}
+                <div className="sk-progress sk-progress--sm mt-2">
                     <div className="sk-progress__track">
                         <div
                             className={`sk-progress__fill ${isHours ? 'sk-progress__fill--purple' : 'sk-progress__fill--blue'}`}
@@ -470,7 +781,8 @@ const CounterItem = ({ data, onUpdate, onDelete }) => {
                         type="number"
                         className="sk-num-input__field sk-num-input__field--center"
                         value={data.current}
-                        onChange={(e) => onUpdate(Math.min(parseInt(e.target.value) || 0, data.target))}
+                        onChange={(e) => onUpdate({ current: Math.min(parseInt(e.target.value) || 0, data.target) })}
+                        onFocus={(e) => e.target.select()}
                     />
                     <span className="sk-label">set</span>
                 </div>
@@ -479,89 +791,132 @@ const CounterItem = ({ data, onUpdate, onDelete }) => {
     );
 };
 
-// ─── ADD ITEM MODAL ───────────────────────────────────────────────────────────
-const AddItemModal = ({ isOpen, onClose, onAddItem }) => {
+let memoryBooksCache = null;
+
+const AddItemModal = ({ isOpen, onClose, onAddItem, activeSkill, existingItems = [] }) => {
+    const { data } = useData();
     const [step, setStep] = useState(1);
     const [selectedType, setSelectedType] = useState(null);
-    const [books, setBooks] = useState([]);
-    const [booksLoading, setBooksLoading] = useState(true);
-    const [selectedBook, setSelectedBook] = useState(null);
-    const [currentPage, setCurrentPage] = useState(0);
+    const [books, setBooks] = useState(() => memoryBooksCache || []);
+    const [booksLoading, setBooksLoading] = useState(false);
+    const [selectedBooks, setSelectedBooks] = useState([]);
     const [taskText, setTaskText] = useState("");
+    const [counterName, setCounterName] = useState("");
     const [counterType, setCounterType] = useState("count");
     const [counterTarget, setCounterTarget] = useState(100);
-    const [selectedPdf, setSelectedPdf] = useState(null);
-    const [isGeneratingPath, setIsGeneratingPath] = useState(false);
     const [bookSearch, setBookSearch] = useState("");
     const [selectedShelfFilter, setSelectedShelfFilter] = useState('all');
     const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('all');
+    const [hideAdded, setHideAdded] = useState(() => {
+        try { return localStorage.getItem('axo_skills_hide_added') === 'true'; } catch { return false; }
+    });
+
+    const toggleHideAdded = () => {
+        setHideAdded(prev => {
+            const next = !prev;
+            try { localStorage.setItem('axo_skills_hide_added', String(next)); } catch { }
+            return next;
+        });
+    };
 
     const resetModal = () => {
-        setStep(1); setSelectedType(null); setSelectedBook(null);
-        setCurrentPage(0); setTaskText(""); setCounterType("count");
-        setCounterTarget(100); setBooks([]); setSelectedPdf(null); setIsGeneratingPath(false); setBookSearch("");
+        setStep(1); setSelectedType(null); setSelectedBooks([]);
+        setTaskText(""); setCounterName(""); setCounterType("count");
+        setCounterTarget(100); setBookSearch("");
         setSelectedShelfFilter('all'); setSelectedCategoryFilter('all');
     };
 
     const handleClose = () => { resetModal(); onClose(); };
 
-    useEffect(() => {
-        const loadLocalBooks = async () => {
-            setBooksLoading(true);
-            const bookDirs = [
-                { path: BOOK_READING_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'reading' },
-                { path: BOOK_WANT_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'want' },
-                { path: BOOK_READ_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'read' },
-                { path: ARTICLE_READING_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'reading' },
-                { path: ARTICLE_WANT_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'want' },
-                { path: ARTICLE_READ_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'read' },
-            ];
-            const results = [];
-            
-            const processFile = async (fileName, dirPath, category, config) => {
-                const fullPath = path.join(dirPath, fileName);
-                const name = path.basename(fileName, '.pdf');
-
-                let coverPath = null;
-                const extensions = ['.jpg', '.jpeg', '.png'];
-                for (const ext of extensions) {
-                    const cachedPath = path.join(config.thumb, name + ext);
-                    if (fs.existsSync(cachedPath)) { coverPath = cachedPath; break; }
-                }
-                if (!coverPath) {
-                    for (const ext of extensions) {
-                        const potential = path.join(dirPath, name + ext);
-                        if (fs.existsSync(potential)) { coverPath = potential; break; }
+    // Set of all book/article titles added across ANY phase in this active skill
+    const allSkillAddedTitles = useMemo(() => {
+        if (!activeSkill?.phases) return new Set();
+        const set = new Set();
+        for (const phase of activeSkill.phases) {
+            for (const item of (phase.items || [])) {
+                if (item.type === 'book' || item.type === 'document') {
+                    if (item.data?.title) {
+                        set.add(item.data.title.toLowerCase().trim());
                     }
                 }
+            }
+        }
+        return set;
+    }, [activeSkill]);
 
-                const meta = readBookMeta(name, config.progress);
-                let totalPages = meta.pages;
-                if (!totalPages) {
-                    try {
-                        pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
-                        const data = await readFile(fullPath);
-                        const pdf = await pdfjsLib.getDocument({ data }).promise;
-                        totalPages = pdf.numPages;
-                        cacheBookPages(name, totalPages, config.progress);
-                    } catch (err) { totalPages = 0; }
-                }
+    // Instant population from DataContext so books/articles snap to appear immediately
+    useEffect(() => {
+        if (!isOpen) return;
 
-                results.push({ 
-                    id: fullPath, 
-                    title: name, 
-                    pages: totalPages, 
-                    cover: coverPath || path.join(config.thumb, name + '.jpg'), 
-                    path: fullPath, 
-                    currentProgress: meta.current, 
-                    shelf: config.shelf, 
-                    category: category || 'General',
-                    dbType: config.type,
-                    progressPath: config.progress 
+        // If we already have items in memory cache, use them immediately
+        if (memoryBooksCache && memoryBooksCache.length > 0) {
+            setBooks(memoryBooksCache);
+            return;
+        }
+
+        // Build list instantly from DataContext
+        const ctxItems = [];
+        if (data?.reading?.shelves) {
+            Object.entries(data.reading.shelves).forEach(([shelfKey, booksList]) => {
+                const shelf = shelfKey === 'WanttoRead' ? 'want' : shelfKey.toLowerCase();
+                (booksList || []).forEach(b => {
+                    const coverPath = b.cover ? (b.cover.startsWith('file://') ? b.cover.replace('file://', '') : b.cover) : path.join(BOOK_THUMBNAIL_PATH, b.name + '.jpg');
+                    ctxItems.push({
+                        id: b.fullPath,
+                        title: b.name,
+                        pages: b.totalPages || b.progress?.total || 0,
+                        cover: coverPath,
+                        path: b.fullPath,
+                        currentProgress: b.progress?.current || 0,
+                        shelf: shelf,
+                        category: b.category || 'General',
+                        dbType: 'book',
+                        progressPath: BOOK_PROGRESS_PATH
+                    });
                 });
-            };
+            });
+        }
+        if (data?.articles?.shelves) {
+            Object.entries(data.articles.shelves).forEach(([shelfKey, articlesList]) => {
+                const shelf = shelfKey === 'WanttoRead' ? 'want' : shelfKey.toLowerCase();
+                (articlesList || []).forEach(a => {
+                    const coverPath = a.cover ? (a.cover.startsWith('file://') ? a.cover.replace('file://', '') : a.cover) : path.join(ARTICLE_THUMBNAIL_PATH, a.name + '.jpg');
+                    ctxItems.push({
+                        id: a.fullPath,
+                        title: a.name,
+                        pages: a.totalPages || a.progress?.total || 0,
+                        cover: coverPath,
+                        path: a.fullPath,
+                        currentProgress: a.progress?.current || 0,
+                        shelf: shelf,
+                        category: a.category || 'General',
+                        dbType: 'article',
+                        progressPath: ARTICLE_PROGRESS_PATH
+                    });
+                });
+            });
+        }
 
+        if (ctxItems.length > 0) {
+            setBooks(ctxItems);
+            memoryBooksCache = ctxItems;
+            setBooksLoading(false);
+        }
+
+        // Non-blocking background scan to pick up any files not yet in context
+        const scanBackground = async () => {
             try {
+                const bookDirs = [
+                    { path: BOOK_READING_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'reading' },
+                    { path: BOOK_WANT_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'want' },
+                    { path: BOOK_READ_PATH, type: 'book', progress: BOOK_PROGRESS_PATH, thumb: BOOK_THUMBNAIL_PATH, shelf: 'read' },
+                    { path: ARTICLE_READING_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'reading' },
+                    { path: ARTICLE_WANT_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'want' },
+                    { path: ARTICLE_READ_PATH, type: 'article', progress: ARTICLE_PROGRESS_PATH, thumb: ARTICLE_THUMBNAIL_PATH, shelf: 'read' },
+                ];
+                const scanned = [];
+                const extensions = ['.jpg', '.jpeg', '.png'];
+
                 for (const config of bookDirs) {
                     if (!fs.existsSync(config.path)) continue;
                     const items = fs.readdirSync(config.path, { withFileTypes: true });
@@ -574,256 +929,452 @@ const AddItemModal = ({ isOpen, onClose, onAddItem }) => {
                                 const catFiles = fs.readdirSync(catPath);
                                 for (const file of catFiles) {
                                     if (path.extname(file).toLowerCase() === '.pdf') {
-                                        await processFile(file, catPath, catName, config);
+                                        const name = path.basename(file, '.pdf');
+                                        const fullPath = path.join(catPath, file);
+                                        let coverPath = null;
+                                        for (const ext of extensions) {
+                                            const cachedPath = path.join(config.thumb, name + ext);
+                                            if (fs.existsSync(cachedPath)) { coverPath = cachedPath; break; }
+                                        }
+                                        const meta = readBookMeta(name, config.progress, config.type);
+                                        scanned.push({
+                                            id: fullPath,
+                                            title: name,
+                                            pages: meta.pages || 0,
+                                            cover: coverPath || path.join(config.thumb, name + '.jpg'),
+                                            path: fullPath,
+                                            currentProgress: meta.current || 0,
+                                            shelf: config.shelf,
+                                            category: catName || 'General',
+                                            dbType: config.type,
+                                            progressPath: config.progress
+                                        });
                                     }
                                 }
-                            } catch (e) {}
+                            } catch (e) { }
                         } else {
                             if (path.extname(item.name).toLowerCase() === '.pdf') {
-                                await processFile(item.name, config.path, null, config);
+                                const name = path.basename(item.name, '.pdf');
+                                const fullPath = path.join(config.path, item.name);
+                                let coverPath = null;
+                                for (const ext of extensions) {
+                                    const cachedPath = path.join(config.thumb, name + ext);
+                                    if (fs.existsSync(cachedPath)) { coverPath = cachedPath; break; }
+                                }
+                                const meta = readBookMeta(name, config.progress, config.type);
+                                scanned.push({
+                                    id: fullPath,
+                                    title: name,
+                                    pages: meta.pages || 0,
+                                    cover: coverPath || path.join(config.thumb, name + '.jpg'),
+                                    path: fullPath,
+                                    currentProgress: meta.current || 0,
+                                    shelf: config.shelf,
+                                    category: 'General',
+                                    dbType: config.type,
+                                    progressPath: config.progress
+                                });
                             }
                         }
                     }
                 }
-                setBooks(results);
-            } catch (err) { console.error(err); }
-            setBooksLoading(false);
+                if (scanned.length > 0) {
+                    setBooks(scanned);
+                    memoryBooksCache = scanned;
+                }
+            } catch (err) { }
         };
-        if (isOpen && (selectedType === 'book' || selectedType === 'document') && step === 2) loadLocalBooks();
-    }, [isOpen, selectedType, step]);
+        scanBackground();
+    }, [isOpen, data]);
 
-    const categories = Array.from(new Set(
-        books.filter(b => (selectedType === 'document' ? b.dbType === 'article' : b.dbType === 'book'))
-             .map(b => b.category)
-    )).sort();
+    const categories = useMemo(() => {
+        return Array.from(new Set(
+            books.filter(b => (selectedType === 'document' ? b.dbType === 'article' : b.dbType === 'book'))
+                .map(b => b.category)
+        )).sort();
+    }, [books, selectedType]);
 
-    const filteredBooks = books.filter(b => {
-        const typeMatch = selectedType === 'document' ? b.dbType === 'article' : b.dbType === 'book';
-        const matchesSearch = b.title.toLowerCase().includes(bookSearch.toLowerCase());
-        const matchesShelf = selectedShelfFilter === 'all' || b.shelf === selectedShelfFilter;
-        const matchesCategory = selectedCategoryFilter === 'all' || b.category === selectedCategoryFilter;
-        return typeMatch && matchesSearch && matchesShelf && matchesCategory;
-    });
+    const filteredBooks = useMemo(() => {
+        return books.filter(b => {
+            const typeMatch = selectedType === 'document' ? b.dbType === 'article' : b.dbType === 'book';
+            if (!typeMatch) return false;
+
+            const isAlreadyAdded = allSkillAddedTitles.has(b.title.toLowerCase().trim());
+            if (hideAdded && isAlreadyAdded) return false;
+
+            const matchesSearch = !bookSearch.trim() || b.title.toLowerCase().includes(bookSearch.toLowerCase().trim());
+            const matchesShelf = selectedShelfFilter === 'all' || b.shelf === selectedShelfFilter;
+            const matchesCategory = selectedCategoryFilter === 'all' || b.category === selectedCategoryFilter;
+            return matchesSearch && matchesShelf && matchesCategory;
+        });
+    }, [books, selectedType, allSkillAddedTitles, hideAdded, bookSearch, selectedShelfFilter, selectedCategoryFilter]);
 
     const handleAddFinal = async () => {
-        if ((selectedType === 'book' || selectedType === 'document') && selectedBook) {
-            let initialP = 0;
-            if (selectedBook.shelf === 'read') initialP = selectedBook.pages;
-            else if (selectedBook.shelf === 'reading') initialP = selectedBook.currentProgress;
-            else initialP = 0;
-            
-            onAddItem({ 
-                type: selectedType, 
-                data: { 
-                    title: selectedBook.title, 
-                    pages: selectedBook.pages, 
-                    cover: selectedBook.cover, 
-                    currentPage: initialP,
-                    dbType: selectedBook.dbType,
-                    progressPath: selectedBook.progressPath,
-                    path: selectedBook.path
-                } 
-            });
+        if ((selectedType === 'book' || selectedType === 'document') && selectedBooks.length > 0) {
+            const itemsToAdd = [];
+            for (const book of selectedBooks) {
+                let pages = book.pages || 0;
+                const resolvedPath = book.path || findPdfPath(book);
+                if (!pages || pages === 0) {
+                    if (resolvedPath) {
+                        const pdfPages = await getPdfTotalPages(resolvedPath);
+                        if (pdfPages > 0) {
+                            pages = pdfPages;
+                            cacheBookPages(book.title, pages, book.progressPath);
+                        }
+                    }
+                }
+                let initialP = readBookProgress(book.title, book.progressPath, book.dbType, pages);
+                if (book.shelf === 'read') {
+                    initialP = pages;
+                }
+                itemsToAdd.push({
+                    type: selectedType,
+                    data: {
+                        title: book.title,
+                        pages: pages,
+                        cover: book.cover,
+                        currentPage: initialP,
+                        dbType: book.dbType,
+                        progressPath: book.progressPath,
+                        path: resolvedPath || book.path
+                    }
+                });
+            }
+            onAddItem(itemsToAdd);
         } else if (selectedType === 'task' && taskText.trim()) {
             onAddItem({ type: 'task', data: { text: taskText.trim(), completed: false } });
-        } else if (selectedType === 'counter') {
-            onAddItem({ type: 'counter', data: { type: counterType, current: 0, target: counterTarget } });
+        } else if (selectedType === 'counter' && counterName.trim()) {
+            onAddItem({ type: 'counter', data: { name: counterName.trim(), type: counterType, current: 0, target: counterTarget } });
         }
         handleClose();
     };
 
     if (!isOpen) return null;
 
-    const canProceed = !((selectedType === 'book' || selectedType === 'document') && !selectedBook) &&
-        !(selectedType === 'task' && !taskText.trim());
+    const canProceed = !((selectedType === 'book' || selectedType === 'document') && selectedBooks.length === 0) &&
+        !(selectedType === 'task' && !taskText.trim()) &&
+        !(selectedType === 'counter' && !counterName.trim());
 
     const accentMap = { book: 'orange', document: 'blue', task: 'emerald', counter: 'blue' };
     const accent = selectedType ? accentMap[selectedType] : 'blue';
 
+    const modalClass = step === 1
+        ? 'sk-modal--type-picker'
+        : (selectedType === 'book' || selectedType === 'document')
+            ? 'sk-modal--books'
+            : 'sk-modal--form';
+
     return (
         <div className="sk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) handleClose(); }}>
-        <div className="sk-modal sk-modal--md">
-                <div className="sk-modal__head sk-modal__head--tiny">
-                    <div />
-                    <button onClick={handleClose} className="sk-icon-btn">
+            <div className={`sk-modal ${modalClass}`}>
+                {/* Header */}
+                <div className="sk-modal__head" style={{ padding: '0.75rem 1rem' }}>
+                    <div className="flex items-center gap-2.5">
+                        <span className="sk-modal__title">
+                            {step === 1 ? 'Add Component' : (
+                                selectedType === 'book' ? 'Add Literature' :
+                                    selectedType === 'document' ? 'Add Articles' :
+                                        selectedType === 'task' ? 'Create Task' : 'Define Metric'
+                            )}
+                        </span>
+                        {step === 2 && (
+                            <span className="sk-pill" style={{ opacity: 0.8, fontSize: '0.55rem' }}>
+                                {activeSkill?.phases?.find(p => p.id === existingItems?.[0]?.phaseId)?.name || 'Active Phase'}
+                            </span>
+                        )}
+                    </div>
+                    <button onClick={handleClose} className="sk-icon-btn" title="Close">
                         <LocalIcon src={closeIcon} size={11} className="sk-icon" />
                     </button>
                 </div>
 
-                <div className="sk-modal__body">
+                {/* Body */}
+                <div className="sk-modal__body" style={{ padding: '0.875rem 1rem', flex: 1, overflowY: 'auto' }}>
                     {step === 1 && (
-                        <div className="sk-type-grid">
+                        <div className="sk-type-list--picker">
                             {[
-                                { type: 'book', icon: bookIcon, label: 'Literature', desc: 'Sync PDF files', accent: 'orange' },
-                                { type: 'document', icon: conceptsIcon, label: 'Articles', desc: 'Sync PDF files', accent: 'blue' },
-                                { type: 'task', icon: checkIcon, label: 'Task', desc: 'Actionable item', accent: 'emerald' },
-                                { type: 'counter', icon: chartIcon, label: 'Metric', desc: 'Continuous tracker', accent: 'blue' },
+                                { type: 'book', icon: bookIcon, label: 'Literature', desc: 'Add books & sync reading progress', accent: 'orange' },
+                                { type: 'document', icon: conceptsIcon, label: 'Articles', desc: 'Add articles & research papers', accent: 'blue' },
+                                { type: 'task', icon: checkIcon, label: 'Task', desc: 'Actionable goal checklist item', accent: 'emerald' },
+                                { type: 'counter', icon: chartIcon, label: 'Metric', desc: 'Continuous integer or temporal tracker', accent: 'purple' },
                             ].map(item => (
                                 <button
                                     key={item.type}
                                     onClick={() => { setSelectedType(item.type); setStep(2); }}
-                                    className={`sk-type-btn sk-type-btn--${item.accent}`}
+                                    className={`sk-type-btn--picker sk-type-btn--${item.accent}`}
                                 >
-                                    <div className={`sk-type-btn__icon sk-type-btn__icon--${item.accent}`}>
+                                    <div className={`sk-type-btn__icon--picker sk-type-btn__icon--${item.accent}`}>
                                         <LocalIcon src={item.icon} size={18} className={`sk-icon--${item.accent}`} />
                                     </div>
-                                    <div className="sk-type-btn__content">
-                                        <span className="sk-type-btn__label">{item.label}</span>
-                                        <span className="sk-type-btn__desc">{item.desc}</span>
+                                    <div style={{ flex: 1 }}>
+                                        <span className="sk-type-btn__label--picker">{item.label}</span>
+                                        <span className="sk-type-btn__desc--picker">{item.desc}</span>
                                     </div>
-                                    <LocalIcon src={chevronRightIcon} size={11} className="sk-icon--muted" />
+                                    <LocalIcon src={chevronRightIcon} size={14} className="sk-icon--muted" />
                                 </button>
                             ))}
                         </div>
                     )}
 
                     {step === 2 && (selectedType === 'book' || selectedType === 'document') && (
-                        <div className="sk-fade-in">
-                            {booksLoading ? (
-                                <div className="sk-empty-state">
-                                    <img src={rotateIcon} className="w-5 h-5 invert animate-spin opacity-40" alt="loading" />
-                                    <span className="sk-label mt-2">Scanning workspace…</span>
+                        <div className="sk-fade-in flex flex-col h-full">
+                            {/* Filter Bar (Pixel-perfect centered alignment) */}
+                            <div className="sk-filter-bar">
+                                {/* Search */}
+                                <div className="sk-filter-control sk-filter-control--search">
+                                    <LocalIcon src={menuIcon} size={13} className="sk-icon--muted sk-search-icon" />
+                                    <input
+                                        className="sk-search-input"
+                                        placeholder={`Search ${selectedType === 'book' ? 'literature' : 'articles'} by title...`}
+                                        value={bookSearch}
+                                        onChange={e => setBookSearch(e.target.value)}
+                                        autoFocus
+                                    />
+                                    {bookSearch && (
+                                        <button className="sk-search-clear" onClick={() => setBookSearch("")}>
+                                            <LocalIcon src={closeIcon} size={10} className="sk-icon--muted" />
+                                        </button>
+                                    )}
                                 </div>
-                            ) : (
-                                <>
-                                    <div className="flex gap-2 mb-3 items-stretch" style={{ height: '32px' }}>
-                                        <div className="sk-search-wrap mb-0 flex-1" style={{ height: '100%' }}>
-                                            <LocalIcon src={menuIcon} size={12} className="sk-icon--muted sk-search-icon" />
-                                            <input
-                                                className="sk-search-input"
-                                                placeholder="Search library..."
-                                                value={bookSearch}
-                                                onChange={e => setBookSearch(e.target.value)}
-                                                autoFocus
-                                            />
-                                            {bookSearch && (
-                                                <button className="sk-search-clear" onClick={() => setBookSearch("")}>
-                                                    <LocalIcon src={closeIcon} size={9} className="sk-icon--muted" />
-                                                </button>
-                                            )}
-                                        </div>
 
-                                            <div className="sk-select-wrap" style={{ width: '100px', height: '100%' }}>
-                                                <select 
-                                                    className="sk-select" 
-                                                    style={{ height: '100%', fontSize: '0.6rem', padding: '0 1.5rem 0 0.5rem', background: 'var(--bg-3)', cursor: 'pointer', margin: 0 }}
-                                                    value={selectedShelfFilter}
-                                                    onChange={(e) => setSelectedShelfFilter(e.target.value)}
-                                            >
-                                                <option value="all">All Shelves</option>
-                                                <option value="reading">Currently Reading</option>
-                                                <option value="want">Queue</option>
-                                                <option value="read">Read</option>
-                                            </select>
-                                            <div className="sk-select-arrow">
-                                                <LocalIcon src={chevronDownIcon} size={8} className="sk-icon--muted" />
-                                            </div>
-                                        </div>
-
-                                            <div className="sk-select-wrap" style={{ width: '100px', height: '100%' }}>
-                                                <select 
-                                                    className="sk-select" 
-                                                    style={{ height: '100%', fontSize: '0.6rem', padding: '0 1.5rem 0 0.5rem', background: 'var(--bg-3)', cursor: 'pointer', margin: 0 }}
-                                                    value={selectedCategoryFilter}
-                                                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                                            >
-                                                <option value="all">All Cats</option>
-                                                {categories.map(cat => (
-                                                    <option key={cat} value={cat}>{cat}</option>
-                                                ))}
-                                            </select>
-                                            <div className="sk-select-arrow">
-                                                <LocalIcon src={chevronDownIcon} size={8} className="sk-icon--muted" />
-                                            </div>
-                                        </div>
+                                {/* Shelf Filter */}
+                                <div className="sk-filter-control sk-filter-control--select">
+                                    <select
+                                        className="sk-select"
+                                        value={selectedShelfFilter}
+                                        onChange={(e) => setSelectedShelfFilter(e.target.value)}
+                                    >
+                                        <option value="all">All Shelves</option>
+                                        <option value="reading">Currently Reading</option>
+                                        <option value="want">Want to Read</option>
+                                        <option value="read">Read</option>
+                                    </select>
+                                    <div className="sk-select-arrow">
+                                        <LocalIcon src={chevronDownIcon} size={9} className="sk-icon--muted" />
                                     </div>
+                                </div>
 
-                                    <div className="sk-book-list">
-                                        {filteredBooks.length === 0 ? (
-                                            <div className="sk-phase__empty">No items found matching filters</div>
-                                        ) : (
-                                            filteredBooks.map(book => (
-                                                <div
-                                                    key={book.id}
-                                                    onClick={() => setSelectedBook(book)}
-                                                    className={`sk-book-row ${selectedBook?.id === book.id ? 'sk-book-row--selected' : ''}`}
-                                                >
-                                                    <LocalCover path={book.cover} pdfPath={book.path} className="sk-book-row__cover" />
-                                                    <div className="flex flex-col flex-1 min-width-0">
-                                                        <span className="sk-book-row__title">{book.title}</span>
-                                                        <span style={{ fontSize: '0.5rem', color: 'var(--text-4)', textTransform: 'uppercase' }}>
-                                                            {book.shelf} · {book.category}
-                                                        </span>
-                                                    </div>
-                                                    {selectedBook?.id === book.id && (
-                                                        <LocalIcon src={checkIcon} size={11} className="sk-icon--orange" />
-                                                    )}
-                                                </div>
-                                            ))
+                                {/* Category Filter */}
+                                <div className="sk-filter-control sk-filter-control--select">
+                                    <select
+                                        className="sk-select"
+                                        value={selectedCategoryFilter}
+                                        onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                                    >
+                                        <option value="all">All Categories</option>
+                                        {categories.map(cat => (
+                                            <option key={cat} value={cat}>{cat}</option>
+                                        ))}
+                                    </select>
+                                    <div className="sk-select-arrow">
+                                        <LocalIcon src={chevronDownIcon} size={9} className="sk-icon--muted" />
+                                    </div>
+                                </div>
+
+                                {/* Hide Added Toggle */}
+                                <button
+                                    type="button"
+                                    onClick={toggleHideAdded}
+                                    className={`sk-filter-control sk-filter-control--toggle ${hideAdded ? 'sk-filter-control--toggle-active' : ''}`}
+                                    title={hideAdded ? "Currently hiding items already in this skill. Click to show all." : "Currently showing all items. Click to hide added items."}
+                                >
+                                    <div className="sk-toggle-box">
+                                        {hideAdded && <LocalIcon src={checkIcon} size={9} className="sk-icon--white" />}
+                                    </div>
+                                    <span>Hide Added</span>
+                                    {allSkillAddedTitles.size > 0 && (
+                                        <span className="sk-toggle-count">({allSkillAddedTitles.size})</span>
+                                    )}
+                                </button>
+                            </div>
+
+                            {/* Books Grid - 5x bigger thumbnails, snappy presentation */}
+                            <div className="sk-book-list--grid flex-1">
+                                {filteredBooks.length === 0 ? (
+                                    <div className="sk-empty-dashed col-span-full py-12">
+                                        <LocalIcon src={bookIcon} size={28} className="sk-icon--muted opacity-30 mx-auto mb-2" />
+                                        <p className="sk-label sk-label--dim text-xs">No items found matching your filters</p>
+                                        {hideAdded && allSkillAddedTitles.size > 0 && (
+                                            <button
+                                                onClick={() => setHideAdded(false)}
+                                                className="sk-btn sk-btn--ghost mt-2 text-xs"
+                                            >
+                                                Show {allSkillAddedTitles.size} hidden items already in skill
+                                            </button>
                                         )}
                                     </div>
-                                </>
-                            )}
-                            {selectedBook && (
-                                <div className="sk-info-row sk-fade-in">
-                                    <span className="sk-label sk-label--italic">Synced from bookshelf</span>
-                                    <span className="sk-value--orange">p.{selectedBook.currentProgress} <span className="sk-value--muted">/ {selectedBook.pages}</span></span>
+                                ) : (
+                                    filteredBooks.map(b => {
+                                        const isSelected = selectedBooks.some(sb => sb.id === b.id);
+                                        const isMulti = selectedBooks.length > 1;
+                                        const selClass = isSelected ? (isMulti ? 'sk-book-card--selected-multi' : 'sk-book-card--selected') : '';
+                                        const isAlreadyInSkill = allSkillAddedTitles.has(b.title.toLowerCase().trim());
+
+                                        return (
+                                            <div
+                                                key={b.id}
+                                                className={`sk-book-card ${selClass}`}
+                                                onClick={(e) => {
+                                                    if (e.ctrlKey || e.metaKey) {
+                                                        if (isSelected) {
+                                                            setSelectedBooks(prev => prev.filter(sb => sb.id !== b.id));
+                                                        } else {
+                                                            setSelectedBooks(prev => [...prev, b]);
+                                                        }
+                                                    } else {
+                                                        setSelectedBooks([b]);
+                                                    }
+                                                }}
+                                            >
+                                                {/* 5x Bigger Thumbnail Cover */}
+                                                <div className="sk-book-card__cover-wrap">
+                                                    <LocalCover path={b.cover} pdfPath={b.path} className="sk-book-card__cover" />
+                                                    {b.pages > 0 && (
+                                                        <div className="sk-item__cover-overlay">
+                                                            <span className="sk-item__cover-label">{b.pages}p</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                {/* Card Content */}
+                                                <div className="sk-book-card__content">
+                                                    <div>
+                                                        <div className="flex items-start justify-between gap-2">
+                                                            <h4 className="sk-book-card__title" title={b.title}>
+                                                                {b.title}
+                                                            </h4>
+                                                            {isSelected && (
+                                                                <div className="w-4 h-4 rounded-full bg-orange-500 flex items-center justify-center flex-shrink-0">
+                                                                    <LocalIcon src={checkIcon} size={10} className="sk-icon--white" />
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        <div className="sk-book-card__badges">
+                                                            <span className={`sk-pill ${b.shelf === 'reading' ? 'sk-pill--reading' : b.shelf === 'read' ? 'sk-pill--read' : 'sk-pill--want'}`}>
+                                                                {b.shelf === 'reading' ? 'Currently Reading' : b.shelf === 'read' ? 'Read' : 'Queue'}
+                                                            </span>
+                                                            <span className="sk-pill">
+                                                                {b.category}
+                                                            </span>
+                                                            {isAlreadyInSkill && (
+                                                                <span className="sk-pill sk-pill--in-skill">
+                                                                    Added
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-center justify-between text-[0.625rem] text-zinc-400 font-mono pt-1.5 border-t border-zinc-800/60">
+                                                        <span>{b.pages > 0 ? `${b.pages} Pages` : 'PDF Document'}</span>
+                                                        <span className="text-zinc-500">{b.dbType === 'article' ? 'Article' : 'Book'}</span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })
+                                )}
+                            </div>
+
+                            {selectedBooks.length > 0 && (
+                                <div className="sk-info-row sk-fade-in mt-2" style={{ padding: '0.4rem 0.75rem' }}>
+                                    <span className="sk-label sk-label--italic" style={{ fontSize: '0.7rem' }}>
+                                        {selectedBooks.length} item{selectedBooks.length > 1 ? 's' : ''} selected (Ctrl/Cmd to multi-select)
+                                    </span>
+                                    <button
+                                        onClick={() => setSelectedBooks([])}
+                                        className="text-xs text-zinc-400 hover:text-white underline"
+                                    >
+                                        Clear Selection
+                                    </button>
                                 </div>
                             )}
                         </div>
                     )}
 
                     {step === 2 && selectedType === 'task' && (
-                        <div className="sk-fade-in">
+                        <div className="sk-fade-in space-y-2">
+                            <label className="sk-label block">Task Description</label>
                             <textarea
                                 className="sk-textarea"
-                                placeholder="State actionable intent…"
+                                placeholder="Describe the specific actionable objective to complete…"
                                 value={taskText}
-                                onChange={(e) => setTaskText(e.target.value)}
+                                onChange={(e) => setTaskText(capitalizeFirst(e.target.value))}
                                 autoFocus
+                                rows={4}
+                                style={{ height: '7rem', resize: 'vertical' }}
                             />
+                            <p className="text-xs text-zinc-500 font-mono">
+                                Actionable checkpoints will be tracked within this module.
+                            </p>
                         </div>
                     )}
 
                     {step === 2 && selectedType === 'counter' && (
                         <div className="sk-fade-in space-y-3">
-                            <div className="sk-toggle-grid">
-                                <button
-                                    onClick={() => setCounterType('count')}
-                                    className={`sk-toggle ${counterType === 'count' ? 'sk-toggle--blue' : ''}`}
-                                >
-                                    <LocalIcon src={hashIcon} size={14} className="sk-icon--muted" /> Integer
-                                </button>
-                                <button
-                                    onClick={() => setCounterType('hours')}
-                                    className={`sk-toggle ${counterType === 'hours' ? 'sk-toggle--purple' : ''}`}
-                                >
-                                    <LocalIcon src={clockIcon} size={14} className="sk-icon--muted" /> Temporal
-                                </button>
-                            </div>
-                            <div className="sk-field-row">
-                                <LocalIcon src={goalsIcon} size={18} className="sk-icon--muted" />
+                            <div>
+                                <label className="sk-label block mb-1">Metric Name</label>
                                 <input
-                                    type="number"
-                                    className="sk-num-input__field flex-1"
-                                    value={counterTarget}
-                                    onChange={(e) => setCounterTarget(parseInt(e.target.value) || 0)}
+                                    type="text"
+                                    className="sk-input"
+                                    placeholder="e.g. Practice Scales, LeetCode Problems, Run Kilometers…"
+                                    value={counterName}
+                                    onChange={(e) => setCounterName(capitalizeFirst(e.target.value))}
+                                    autoFocus
                                 />
-                                <span className="sk-label">threshold</span>
+                            </div>
+
+                            <div>
+                                <label className="sk-label block mb-1">Tracking Mode</label>
+                                <div className="sk-toggle-grid">
+                                    <button
+                                        type="button"
+                                        onClick={() => setCounterType('count')}
+                                        className={`sk-toggle ${counterType === 'count' ? 'sk-toggle--blue' : ''}`}
+                                    >
+                                        <LocalIcon src={hashIcon} size={14} className="sk-icon--muted" /> Units / Reps
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setCounterType('hours')}
+                                        className={`sk-toggle ${counterType === 'hours' ? 'sk-toggle--purple' : ''}`}
+                                    >
+                                        <LocalIcon src={clockIcon} size={14} className="sk-icon--muted" /> Hours
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="sk-label block mb-1">Target Threshold</label>
+                                <div className="sk-field-row">
+                                    <LocalIcon src={goalsIcon} size={16} className="sk-icon--muted" />
+                                    <input
+                                        type="number"
+                                        className="sk-num-input__field flex-1"
+                                        value={counterTarget}
+                                        onChange={(e) => setCounterTarget(parseInt(e.target.value) || 0)}
+                                        style={{ textAlign: 'left' }}
+                                    />
+                                    <span className="sk-label">Target Value</span>
+                                </div>
                             </div>
                         </div>
                     )}
                 </div>
 
+                {/* Footer */}
                 {step === 2 && (
                     <div className="sk-modal__foot">
-                        <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost">Back</button>
+                        <button onClick={() => setStep(1)} className="sk-btn sk-btn--ghost">
+                            Back
+                        </button>
                         <button
                             onClick={handleAddFinal}
-                            disabled={!canProceed && selectedType !== 'counter'}
-                            className={`sk-btn sk-btn--accent-${accent} flex-1`}
+                            disabled={!canProceed}
+                            className={`sk-btn sk-btn--accent-${accent} px-6`}
                         >
-                            Initialize
+                            Add {selectedBooks.length > 1 ? `(${selectedBooks.length})` : ''}
                         </button>
                     </div>
                 )}
@@ -844,7 +1395,7 @@ export default function SkillsApp({ showNavbar = true }) {
     const [modalMode, setModalMode] = useState('skill');
     const [newSkillName, setNewSkillName] = useState("");
     const [newPhaseName, setNewPhaseName] = useState("");
-    const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [activePhaseIdForItem, setActivePhaseIdForItem] = useState(null);
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [editingSkillId, setEditingSkillId] = useState(null);
@@ -855,11 +1406,70 @@ export default function SkillsApp({ showNavbar = true }) {
     const [isLessonModalOpen, setIsLessonModalOpen] = useState(false);
     const [currentEditingLesson, setCurrentEditingLesson] = useState(null);
     const [deleteConfirmSkillId, setDeleteConfirmSkillId] = useState(null);
+    const [deleteConfirmPhaseId, setDeleteConfirmPhaseId] = useState(null);
     const [editingPhaseId, setEditingPhaseId] = useState(null);
     const [editingPhaseName, setEditingPhaseName] = useState("");
 
+    const contentRef = useRef(null);
+    const skillScrollPositions = useRef({});
+    const [activePhaseIdx, setActivePhaseIdx] = useState(0);
+
     const activeSkill = useMemo(() => skills.find(s => s.id === activeSkillId), [skills, activeSkillId]);
     const currentLessons = useMemo(() => activeSkill?.lessons || [], [activeSkill]);
+
+    // Track scroll position per skill and update active phase index
+    const handleContentScroll = (e) => {
+        if (activeSkillId) {
+            skillScrollPositions.current[activeSkillId] = e.currentTarget.scrollTop;
+            try {
+                sessionStorage.setItem('axo_skill_scroll_' + activeSkillId, String(e.currentTarget.scrollTop));
+            } catch { }
+        }
+        if (activeSkill && activeSkill.phases && activeSkill.phases.length > 0) {
+            const containerTop = e.currentTarget.getBoundingClientRect().top;
+            let closestIdx = 0;
+            let minDiff = Infinity;
+            activeSkill.phases.forEach((phase, idx) => {
+                const el = document.getElementById('sk-phase-' + phase.id);
+                if (el) {
+                    const diff = Math.abs(el.getBoundingClientRect().top - containerTop);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        closestIdx = idx;
+                    }
+                }
+            });
+            setActivePhaseIdx(closestIdx);
+        }
+    };
+
+    // Restore scroll position when activeSkillId changes
+    useEffect(() => {
+        if (!activeSkillId) return;
+        let savedScroll = skillScrollPositions.current[activeSkillId];
+        if (savedScroll === undefined) {
+            try {
+                const stored = sessionStorage.getItem('axo_skill_scroll_' + activeSkillId);
+                if (stored !== null) savedScroll = parseFloat(stored);
+            } catch { }
+        }
+        if (savedScroll === undefined) savedScroll = 0;
+
+        const timer = setTimeout(() => {
+            if (contentRef.current) {
+                contentRef.current.scrollTop = savedScroll;
+            }
+        }, 40);
+        return () => clearTimeout(timer);
+    }, [activeSkillId]);
+
+    const scrollToPhase = (phaseId, idx) => {
+        const el = document.getElementById('sk-phase-' + phaseId);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setActivePhaseIdx(idx);
+        }
+    };
 
     useEffect(() => {
         if (activeSkill) {
@@ -904,16 +1514,48 @@ export default function SkillsApp({ showNavbar = true }) {
         return skill.phases.reduce((sum, phase) => sum + (phase.items ? phase.items.length : 0), 0);
     };
 
+    useEffect(() => {
+        if (data.skills && data.skills.allSkills) {
+            setSkills(prev => {
+                const newSkills = [...data.skills.allSkills];
+                prev.forEach(p => {
+                    if (!newSkills.some(s => s.id === p.id)) {
+                        newSkills.push(p);
+                    }
+                });
+                return newSkills;
+            });
+        }
+    }, [data.skills]);
+
+    useEffect(() => {
+        if (skills.length > 0) {
+            const skillExists = activeSkillId && skills.some(s => s.id === activeSkillId);
+            if (!activeSkillId || !skillExists) {
+                setActiveSkillId(skillId || skills[0].id);
+            }
+        }
+    }, [skills, activeSkillId, skillId]);
+
+    useEffect(() => {
+        if (activeSkillId) {
+            localStorage.setItem('lastActiveSkillId', activeSkillId);
+        }
+    }, [activeSkillId]);
+
     const sortedSkills = useMemo(() => {
         const sorted = [...skills];
         if (skillSortMode === 'oldest') {
-            return sorted.reverse();
+            return sorted.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        } else if (skillSortMode === 'newest') {
+            return sorted.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         } else if (skillSortMode === 'completion') {
             return sorted.sort((a, b) => getSkillProgress(b) - getSkillProgress(a));
         } else if (skillSortMode === 'items') {
             return sorted.sort((a, b) => getSkillItemsCount(b) - getSkillItemsCount(a));
         }
-        return sorted;
+        // Default fallback to newest if mode is something else
+        return sorted.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     }, [skills, skillSortMode]);
 
     const saveSkill = async (skill) => {
@@ -922,15 +1564,7 @@ export default function SkillsApp({ showNavbar = true }) {
         } catch (err) { console.error(err); }
     };
 
-    useEffect(() => {
-        if (data.skills && data.skills.allSkills) {
-            setSkills(data.skills.allSkills);
-            const skillExists = activeSkillId && data.skills.allSkills.some(s => s.id === activeSkillId);
-            if ((!activeSkillId || !skillExists) && data.skills.allSkills.length > 0) {
-                setActiveSkillId(skillId || data.skills.allSkills[0].id);
-            }
-        }
-    }, [data.skills, activeSkillId, skillId]);
+
 
     useEffect(() => {
         if (activeSkillId) {
@@ -941,8 +1575,15 @@ export default function SkillsApp({ showNavbar = true }) {
     const handleCreateSkill = () => {
         const name = newSkillName.trim();
         if (!name) return;
-        const newSkill = { id: generateId(), name, phases: [], lessons: [] };
-        saveSkill(newSkill).then(() => { setSkills(prev => [newSkill, ...prev]); setActiveSkillId(newSkill.id); });
+        const newSkill = { id: generateId(), name, phases: [], lessons: [], createdAt: Date.now() };
+        saveSkill(newSkill).then(() => {
+            setSkills(prev => [newSkill, ...prev]);
+            setActiveSkillId(newSkill.id);
+            localStorage.setItem('lastActiveSkillId', newSkill.id);
+            refreshData();
+            setIsSidebarOpen(false);
+            navigate('/Growth/skills', { replace: true, state: { skillId: newSkill.id } });
+        });
         setIsModalOpen(false); setNewSkillName("");
     };
 
@@ -984,7 +1625,7 @@ export default function SkillsApp({ showNavbar = true }) {
     const handleDeletePhase = async (phaseId) => {
         if (!activeSkill) return;
         const updated = { ...activeSkill, phases: activeSkill.phases.filter(p => p.id !== phaseId) };
-        await saveSkill(updated);
+        saveSkill(updated);
         setSkills(prev => prev.map(s => s.id === activeSkillId ? updated : s));
     };
 
@@ -1018,13 +1659,44 @@ export default function SkillsApp({ showNavbar = true }) {
         setSkills(prev => prev.map(s => s.id === activeSkillId ? updated : s));
     };
 
-    const handleAddItem = async (itemData) => {
+    const handleMoveItemUp = async (phaseId, itemIndex) => {
+        if (!activeSkill || itemIndex <= 0) return;
+        const phase = activeSkill.phases.find(p => p.id === phaseId);
+        if (!phase || !phase.items) return;
+        const newItems = [...phase.items];
+        [newItems[itemIndex - 1], newItems[itemIndex]] = [newItems[itemIndex], newItems[itemIndex - 1]];
+        const updated = {
+            ...activeSkill,
+            phases: activeSkill.phases.map(p => p.id === phaseId ? { ...p, items: newItems } : p)
+        };
+        await saveSkill(updated);
+        setSkills(prev => prev.map(s => s.id === activeSkillId ? updated : s));
+    };
+
+    const handleMoveItemDown = async (phaseId, itemIndex) => {
+        if (!activeSkill) return;
+        const phase = activeSkill.phases.find(p => p.id === phaseId);
+        if (!phase || !phase.items || itemIndex >= phase.items.length - 1) return;
+        const newItems = [...phase.items];
+        [newItems[itemIndex + 1], newItems[itemIndex]] = [newItems[itemIndex], newItems[itemIndex + 1]];
+        const updated = {
+            ...activeSkill,
+            phases: activeSkill.phases.map(p => p.id === phaseId ? { ...p, items: newItems } : p)
+        };
+        await saveSkill(updated);
+        setSkills(prev => prev.map(s => s.id === activeSkillId ? updated : s));
+    };
+
+    const handleAddItem = async (items) => {
         if (!activeSkill || !activePhaseIdForItem) return;
-        const newItem = { id: generateId(), ...itemData };
+        const newItems = Array.isArray(items)
+            ? items.map(item => ({ id: generateId(), ...item }))
+            : [{ id: generateId(), ...items }];
+
         const updated = {
             ...activeSkill,
             phases: activeSkill.phases.map(p =>
-                p.id === activePhaseIdForItem ? { ...p, items: [...(p.items || []), newItem] } : p
+                p.id === activePhaseIdForItem ? { ...p, items: [...(p.items || []), ...newItems] } : p
             )
         };
         await saveSkill(updated);
@@ -1037,7 +1709,7 @@ export default function SkillsApp({ showNavbar = true }) {
         const phase = activeSkill.phases.find(p => p.id === phaseId);
         if (phase) {
             const item = phase.items.find(i => i.id === itemId);
-            if (item && item.type === 'book') bookInfo = { title: item.data.title, progressPath: item.data.progressPath };
+            if (item && (item.type === 'book' || item.type === 'document')) bookInfo = { title: item.data.title, progressPath: item.data.progressPath };
         }
         const updated = {
             ...activeSkill,
@@ -1055,6 +1727,29 @@ export default function SkillsApp({ showNavbar = true }) {
         if (bookInfo && updates.currentPage !== undefined) {
             await writeBookProgress(bookInfo.title, updates.currentPage, bookInfo.progressPath);
         }
+    };
+
+    const handleBulkUpdateItems = async (updatesArray) => {
+        if (!activeSkill) return;
+        let newSkill = { ...activeSkill };
+
+        for (const updateObj of updatesArray) {
+            const { phaseId, itemId, updates } = updateObj;
+            const phaseIndex = newSkill.phases.findIndex(p => p.id === phaseId);
+            if (phaseIndex === -1) continue;
+
+            let newItems = [...newSkill.phases[phaseIndex].items];
+            newItems = newItems.map(i => i.id === itemId ? { ...i, data: { ...i.data, ...updates } } : i);
+            newSkill.phases[phaseIndex].items = newItems;
+
+            const item = newItems.find(i => i.id === itemId);
+            if (item && (item.type === 'book' || item.type === 'document') && updates.currentPage !== undefined) {
+                await writeBookProgress(item.data.title, updates.currentPage, item.data.progressPath);
+            }
+        }
+
+        await saveSkill(newSkill);
+        setSkills(prev => prev.map(s => s.id === activeSkillId ? newSkill : s));
     };
 
     const handleDeleteItem = async (phaseId, itemId) => {
@@ -1118,17 +1813,8 @@ export default function SkillsApp({ showNavbar = true }) {
                 </div>
             )}
 
-            {/* Left edge hover trigger */}
-            <div
-                className="sk-edge-trigger"
-                onMouseEnter={() => { if (!isSidebarOpen) setIsSidebarOpen(true); }}
-            />
-
-            {/* Left Sidebar */}
-            <aside
-                className={`sk-sidebar sk-sidebar--left ${isSidebarOpen ? 'sk-sidebar--open' : ''}`}
-                onMouseLeave={() => setIsSidebarOpen(false)}
-            >
+            {/* Left Sidebar (Fixed) */}
+            <aside className="sk-sidebar sk-sidebar--left">
                 <div className="sk-sidebar__inner">
                     <div className="sk-sidebar__head">
                         <span className="sk-sidebar__title">Skill Set</span>
@@ -1328,12 +2014,6 @@ export default function SkillsApp({ showNavbar = true }) {
                         {/* Header */}
                         <header className="sk-header">
                             <div className="sk-header__left">
-                                <button
-                                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                                    className="sk-icon-btn sk-icon-btn--lg"
-                                >
-                                    <LocalIcon src={menuIcon} size={17} className="sk-icon" />
-                                </button>
                                 <div className="sk-header__title-group">
                                     <h2 className="sk-header__title">{activeSkill.name}</h2>
                                     <div className="sk-header__progress">
@@ -1366,6 +2046,28 @@ export default function SkillsApp({ showNavbar = true }) {
                                         )}
                                     </div>
                                 )}
+
+                                <button
+                                    onClick={async () => {
+                                        if (!activeSkill) return;
+                                        const updatesArray = [];
+                                        for (const phase of activeSkill.phases) {
+                                            const syncItems = phase.items?.filter(i => i.type === 'book' || i.type === 'document') || [];
+                                            for (const item of syncItems) {
+                                                const synced = readBookProgress(item.data.title, item.data.progressPath, item.data.dbType, item.data.pages);
+                                                updatesArray.push({ phaseId: phase.id, itemId: item.id, updates: { currentPage: synced } });
+                                            }
+                                        }
+                                        if (updatesArray.length > 0) {
+                                            await handleBulkUpdateItems(updatesArray);
+                                        }
+                                    }}
+                                    className="sk-hdr-btn"
+                                    title="Sync all book progress"
+                                >
+                                    <LocalIcon src={rotateIcon} size={14} className="sk-icon--muted" />
+                                    <span className="hidden sm:inline">Sync</span>
+                                </button>
 
                                 <button
                                     onClick={() => setIsPlanOpen(!isPlanOpen)}
@@ -1420,7 +2122,7 @@ export default function SkillsApp({ showNavbar = true }) {
                         )}
 
                         {/* Phase List */}
-                        <div className="sk-content">
+                        <div className="sk-content" ref={contentRef} onScroll={handleContentScroll}>
                             {activeSkill.phases.length === 0 ? (
                                 <div className="sk-empty-full">
                                     <div className="sk-empty-full__icon">
@@ -1434,7 +2136,7 @@ export default function SkillsApp({ showNavbar = true }) {
                                     {activeSkill.phases.map((phase, index) => {
                                         const progress = calculateProgress(phase.items);
                                         return (
-                                            <div key={phase.id} className="sk-phase group/phase">
+                                            <div key={phase.id} id={`sk-phase-${phase.id}`} className="sk-phase group/phase">
                                                 <div className="sk-phase__head">
                                                     <div className="sk-phase__head-left">
                                                         <span className="sk-phase__badge">PH</span>
@@ -1443,7 +2145,8 @@ export default function SkillsApp({ showNavbar = true }) {
                                                                 className="sk-inline-edit sk-phase__name-edit"
                                                                 value={editingPhaseName}
                                                                 autoFocus
-                                                                onChange={e => setEditingPhaseName(e.target.value)}
+                                                                onFocus={e => e.target.select()}
+                                                                onChange={e => setEditingPhaseName(capitalizeFirst(e.target.value))}
                                                                 onKeyDown={e => { if (e.key === 'Enter') handleRenamePhase(phase.id); if (e.key === 'Escape') setEditingPhaseId(null); }}
                                                                 onBlur={() => handleRenamePhase(phase.id)}
                                                                 onClick={e => e.stopPropagation()}
@@ -1463,22 +2166,6 @@ export default function SkillsApp({ showNavbar = true }) {
                                                         </div>
                                                     </div>
                                                     <div className="sk-phase__head-actions">
-                                                        {phase.items?.some(i => i.type === 'book') && (
-                                                            <button
-                                                                onClick={async () => {
-                                                                    const bookItems = phase.items.filter(i => i.type === 'book');
-                                                                    for (const item of bookItems) {
-                                                                        const synced = readBookProgress(item.data.title, item.data.progressPath);
-                                                                        await handleUpdateItem(phase.id, item.id, { currentPage: synced });
-                                                                    }
-                                                                }}
-                                                                className="sk-phase-action sk-phase-action--sync"
-                                                                title="Sync book progress"
-                                                            >
-                                                                <LocalIcon src={rotateIcon} size={11} className="sk-icon--white" />
-                                                                <span style={{ color: 'var(--white)' }}>Sync</span>
-                                                            </button>
-                                                        )}
                                                         <button
                                                             onClick={() => handleMovePhaseUp(index)}
                                                             className={`sk-phase-action ${index === 0 ? 'opacity-30 cursor-not-allowed' : ''}`}
@@ -1496,14 +2183,15 @@ export default function SkillsApp({ showNavbar = true }) {
                                                             <LocalIcon src={chevronDownIcon} size={12} className="sk-icon--muted" />
                                                         </button>
                                                         <button
-                                                            onClick={() => { setActivePhaseIdForItem(phase.id); setIsItemModalOpen(true); }}
+                                                            onClick={() => { setActivePhaseIdForItem(phase.id); setIsAddModalOpen(true); }}
                                                             className="sk-phase-action"
                                                         >
                                                             <LocalIcon src={plusIcon} size={12} className="sk-icon--muted" />
                                                             <span className="hidden sm:inline">Add</span>
                                                         </button>
+
                                                         <button
-                                                            onClick={() => handleDeletePhase(phase.id)}
+                                                            onClick={() => setDeleteConfirmPhaseId(phase.id)}
                                                             className="sk-phase-action"
                                                         >
                                                             <LocalIcon src={trashIcon} size={12} className="sk-icon sk-icon--delete" />
@@ -1517,38 +2205,58 @@ export default function SkillsApp({ showNavbar = true }) {
                                                             <p className="sk-label sk-label--dim">Empty module</p>
                                                         </div>
                                                     ) : (
-                                                        phase.items.map(item => (
-                                                            <div key={item.id} className="sk-phase__item">
-                                                                {item.type === 'book' && (
-                                                                    <BookItem
-                                                                        data={item.data}
-                                                                        onUpdate={(val) => handleUpdateItem(phase.id, item.id, { currentPage: val })}
-                                                                        onDelete={() => handleDeleteItem(phase.id, item.id)}
-                                                                    />
-                                                                )}
-                                                                {item.type === 'document' && (
-                                                                    <DocumentItem
-                                                                        data={item.data}
-                                                                        onUpdate={(val) => handleUpdateItem(phase.id, item.id, { currentPage: val })}
-                                                                        onDelete={() => handleDeleteItem(phase.id, item.id)}
-                                                                    />
-                                                                )}
-                                                                {item.type === 'task' && (
-                                                                    <TaskItem
-                                                                        data={item.data}
-                                                                        onUpdate={(val) => handleUpdateItem(phase.id, item.id, val)}
-                                                                        onDelete={() => handleDeleteItem(phase.id, item.id)}
-                                                                    />
-                                                                )}
-                                                                {item.type === 'counter' && (
-                                                                    <CounterItem
-                                                                        data={item.data}
-                                                                        onUpdate={(val) => handleUpdateItem(phase.id, item.id, { current: val })}
-                                                                        onDelete={() => handleDeleteItem(phase.id, item.id)}
-                                                                    />
-                                                                )}
-                                                            </div>
-                                                        ))
+                                                        phase.items.map((item, itemIndex) => {
+                                                            const isFirst = itemIndex === 0;
+                                                            const isLast = itemIndex === phase.items.length - 1;
+                                                            return (
+                                                                <div key={item.id} className="sk-phase__item">
+                                                                    {item.type === 'book' && (
+                                                                        <BookItem
+                                                                            data={item.data}
+                                                                            isFirst={isFirst}
+                                                                            isLast={isLast}
+                                                                            onMoveUp={() => handleMoveItemUp(phase.id, itemIndex)}
+                                                                            onMoveDown={() => handleMoveItemDown(phase.id, itemIndex)}
+                                                                            onUpdate={(val) => handleUpdateItem(phase.id, item.id, typeof val === 'object' ? val : { currentPage: val })}
+                                                                            onDelete={() => handleDeleteItem(phase.id, item.id)}
+                                                                        />
+                                                                    )}
+                                                                    {item.type === 'document' && (
+                                                                        <DocumentItem
+                                                                            data={item.data}
+                                                                            isFirst={isFirst}
+                                                                            isLast={isLast}
+                                                                            onMoveUp={() => handleMoveItemUp(phase.id, itemIndex)}
+                                                                            onMoveDown={() => handleMoveItemDown(phase.id, itemIndex)}
+                                                                            onUpdate={(val) => handleUpdateItem(phase.id, item.id, typeof val === 'object' ? val : { currentPage: val })}
+                                                                            onDelete={() => handleDeleteItem(phase.id, item.id)}
+                                                                        />
+                                                                    )}
+                                                                    {item.type === 'task' && (
+                                                                        <TaskItem
+                                                                            data={item.data}
+                                                                            isFirst={isFirst}
+                                                                            isLast={isLast}
+                                                                            onMoveUp={() => handleMoveItemUp(phase.id, itemIndex)}
+                                                                            onMoveDown={() => handleMoveItemDown(phase.id, itemIndex)}
+                                                                            onUpdate={(val) => handleUpdateItem(phase.id, item.id, val)}
+                                                                            onDelete={() => handleDeleteItem(phase.id, item.id)}
+                                                                        />
+                                                                    )}
+                                                                    {item.type === 'counter' && (
+                                                                        <CounterItem
+                                                                            data={item.data}
+                                                                            isFirst={isFirst}
+                                                                            isLast={isLast}
+                                                                            onMoveUp={() => handleMoveItemUp(phase.id, itemIndex)}
+                                                                            onMoveDown={() => handleMoveItemDown(phase.id, itemIndex)}
+                                                                            onUpdate={(updates) => handleUpdateItem(phase.id, item.id, updates)}
+                                                                            onDelete={() => handleDeleteItem(phase.id, item.id)}
+                                                                        />
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })
                                                     )}
                                                 </div>
                                             </div>
@@ -1557,6 +2265,24 @@ export default function SkillsApp({ showNavbar = true }) {
                                 </div>
                             )}
                         </div>
+
+                        {/* Right-side Line Map Navigation (Recaller style) */}
+                        {activeSkill && activeSkill.phases && activeSkill.phases.length > 1 && (
+                            <div className={`sk-phase-map ${isRightSidebarOpen ? 'sk-phase-map--shifted' : ''}`}>
+                                <div className="sk-phase-map__line" />
+                                {activeSkill.phases.map((phase, i) => (
+                                    <button
+                                        key={phase.id}
+                                        type="button"
+                                        className={`sk-phase-map__node ${i === activePhaseIdx ? 'active' : ''}`}
+                                        onClick={() => scrollToPhase(phase.id, i)}
+                                    >
+                                        <span className="sk-phase-map__label">{phase.name}</span>
+                                        <div className="sk-phase-map__dot" />
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </>
                 ) : (
                     <div className="sk-empty-full">
@@ -1593,7 +2319,7 @@ export default function SkillsApp({ showNavbar = true }) {
                         className="sk-input mt-1"
                         placeholder={modalMode === 'skill' ? "e.g. Learn Piano" : "e.g. Fundamentals"}
                         value={modalMode === 'skill' ? newSkillName : newPhaseName}
-                        onChange={(e) => modalMode === 'skill' ? setNewSkillName(e.target.value) : setNewPhaseName(e.target.value)}
+                        onChange={(e) => modalMode === 'skill' ? setNewSkillName(capitalizeFirst(e.target.value)) : setNewPhaseName(capitalizeFirst(e.target.value))}
                         autoFocus
                     />
                     <div className="sk-modal__foot mt-3">
@@ -1607,9 +2333,11 @@ export default function SkillsApp({ showNavbar = true }) {
             </Modal>
 
             <AddItemModal
-                isOpen={isItemModalOpen}
-                onClose={() => setIsItemModalOpen(false)}
+                isOpen={isAddModalOpen}
+                onClose={() => setIsAddModalOpen(false)}
                 onAddItem={handleAddItem}
+                activeSkill={activeSkill}
+                existingItems={activeSkill && activePhaseIdForItem ? activeSkill.phases.find(p => p.id === activePhaseIdForItem)?.items : []}
             />
 
             <LessonModal
@@ -1624,7 +2352,7 @@ export default function SkillsApp({ showNavbar = true }) {
 
             {deleteConfirmSkillId && (
                 <div className="sk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setDeleteConfirmSkillId(null); }}>
-        <div className="sk-modal sk-modal--sm">
+                    <div className="sk-modal sk-modal--sm">
                         <div className="sk-modal__head">
                             <div className="flex items-center gap-2">
                                 <LocalIcon src={trashIcon} size={13} className="sk-icon--delete opacity-70" />
@@ -1641,6 +2369,31 @@ export default function SkillsApp({ showNavbar = true }) {
                             <div className="sk-modal__foot-right">
                                 <button onClick={() => setDeleteConfirmSkillId(null)} className="sk-btn sk-btn--ghost">Cancel</button>
                                 <button onClick={() => { handleDeleteSkill(deleteConfirmSkillId); setDeleteConfirmSkillId(null); }} className="sk-btn sk-btn--danger">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {deleteConfirmPhaseId && (
+                <div className="sk-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setDeleteConfirmPhaseId(null); }}>
+                    <div className="sk-modal sk-modal--sm">
+                        <div className="sk-modal__head">
+                            <div className="flex items-center gap-2">
+                                <LocalIcon src={trashIcon} size={13} className="sk-icon--delete opacity-70" />
+                                <span className="sk-modal__title">Delete Phase</span>
+                            </div>
+                        </div>
+                        <div className="sk-modal__body">
+                            <p className="sk-body-text">
+                                Delete <span className="text-white font-semibold">{activeSkill?.phases?.find(p => p.id === deleteConfirmPhaseId)?.name}</span>? All items in this phase will be permanently removed.
+                            </p>
+                        </div>
+                        <div className="sk-modal__foot">
+                            <div />
+                            <div className="sk-modal__foot-right">
+                                <button onClick={() => setDeleteConfirmPhaseId(null)} className="sk-btn sk-btn--ghost">Cancel</button>
+                                <button onClick={() => { handleDeletePhase(deleteConfirmPhaseId); setDeleteConfirmPhaseId(null); }} className="sk-btn sk-btn--danger">Delete</button>
                             </div>
                         </div>
                     </div>
@@ -1697,9 +2450,10 @@ export default function SkillsApp({ showNavbar = true }) {
 .sk-edge-trigger { position: fixed; left: 0; top: 3.5rem; bottom: 0; width: 18px; z-index: 55; }
 
 /* ── Sidebars ── */
-.sk-sidebar { position: fixed; top: 0; bottom: 0; z-index: 40; width: 260px; background: var(--bg-1); border-right: 1px solid var(--border); transform: translateX(-100%); transition: transform 240ms cubic-bezier(0.4,0,0.2,1); display: flex; flex-direction: column; }
-.sk-sidebar--left { left: 3rem; }
-.sk-sidebar--right { right: 0; left: auto; border-right: none; border-left: 1px solid var(--border); transform: translateX(100%); width: 280px; z-index: 100; }
+.sk-sidebar { position: fixed; top: 0; bottom: 0; z-index: 40; width: 260px; background: var(--bg-1); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.sk-sidebar--left { left: 3rem; transform: none; }
+.sk-root--no-nav .sk-sidebar--left { left: 3rem; }
+.sk-sidebar--right { right: 0; left: auto; border-right: none; border-left: 1px solid var(--border); transform: translateX(100%); width: 280px; z-index: 100; transition: transform 240ms cubic-bezier(0.4,0,0.2,1); }
 .sk-sidebar--open { transform: translateX(0); }
 .sk-sidebar__inner { display: flex; flex-direction: column; height: 100%; padding-top: 3.5rem; }
 .sk-root--no-nav .sk-sidebar__inner { padding-top: 0; }
@@ -1722,9 +2476,9 @@ export default function SkillsApp({ showNavbar = true }) {
 .sk-skill-row:hover .sk-skill-row__actions { opacity: 1; }
 
 /* ── Main ── */
-.sk-main { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg-1); padding-left: 0; padding-top: 3.5rem; }
-@media (min-width: 768px) { .sk-main { padding-left: 3rem; } }
-.sk-root--no-nav .sk-main { padding-top: 0; }
+.sk-main { width: 100%; height: 100%; display: flex; flex-direction: column; background: var(--bg-1); padding-left: calc(3rem + 260px); padding-top: 3.5rem; }
+@media (max-width: 768px) { .sk-sidebar--left { left: 0; } .sk-main { padding-left: 260px; } }
+.sk-root--no-nav .sk-main { padding-left: calc(3rem + 260px); padding-top: 0; }
 
 /* ── Header ── */
 .sk-header { background: var(--bg); border-bottom: 1px solid var(--border); padding: 0 1rem; height: 2.75rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-shrink: 0; }
@@ -1751,15 +2505,123 @@ export default function SkillsApp({ showNavbar = true }) {
 
 /* ── Plan Bar ── */
 .sk-plan-bar { border-bottom: 1px solid var(--border); background: var(--bg); padding: 0.75rem 1rem; }
-.sk-plan-bar__inner { max-width: 56rem; margin: 0 auto; }
+.sk-plan-bar__inner { max-width: 44rem; margin: 0 auto; }
 
 /* ── Content ── */
-.sk-content { flex: 1; overflow-y: auto; padding: 0.625rem 1rem 1rem; }
+.sk-content { flex: 1; overflow-y: auto; padding: 0.625rem 1rem 1rem; scroll-behavior: smooth; }
 @media (min-width: 640px) { .sk-content { padding: 0.625rem 1.25rem 1.25rem; } }
 @media (min-width: 1024px) { .sk-content { padding: 0.625rem 2rem 1.5rem; } }
 
+/* ── Phase Line Map (Recaller style) ── */
+.sk-phase-map {
+    position: fixed;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+    pointer-events: none;
+    transition: right 240ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.sk-phase-map--shifted {
+    right: 295px;
+}
+.sk-phase-map__line {
+    position: absolute;
+    right: 7px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 1px;
+    pointer-events: none;
+}
+.sk-phase-map__node {
+    position: relative;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+}
+.sk-phase-map__label {
+    position: absolute;
+    right: calc(100% + 10px);
+    top: 50%;
+    transform: translateY(-50%) translateX(6px);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s ease;
+    background: rgba(18, 18, 18, 0.94);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--text-2);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 5px;
+    white-space: nowrap;
+    max-width: 170px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    letter-spacing: 0.02em;
+    z-index: 20;
+}
+.sk-phase-map__node:hover .sk-phase-map__label {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: none;
+    transform: translateY(-50%) translateX(0);
+    color: var(--white);
+    border-color: rgba(255, 255, 255, 0.3);
+    background: rgba(28, 28, 28, 0.98);
+}
+.sk-phase-map__node.active:hover .sk-phase-map__label {
+    color: var(--white);
+    border-color: var(--blue-border);
+    background: rgba(15, 23, 42, 0.98);
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+}
+.sk-phase-map__dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #111;
+    border: 2.5px solid rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+    pointer-events: auto;
+    transition: all 0.2s ease;
+    position: relative;
+    z-index: 2;
+    flex-shrink: 0;
+}
+.sk-phase-map__node:hover .sk-phase-map__dot {
+    background: rgba(59, 130, 246, 0.25);
+    border-color: rgba(59, 130, 246, 0.6);
+    transform: scale(1.2);
+}
+.sk-phase-map__node.active .sk-phase-map__dot {
+    background: #3b82f6;
+    border-color: #3b82f6;
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.6);
+    transform: scale(1.25);
+}
+
 /* ── Phase ── */
-.sk-phase-list { display: flex; flex-direction: column; gap: 0.625rem; max-width: 56rem; margin: 0 auto; padding-bottom: 4rem; }
+.sk-phase-list { display: flex; flex-direction: column; gap: 0.625rem; max-width: 44rem; margin: 0 auto; padding-bottom: 4rem; }
 .sk-phase { background: var(--bg-2); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; transition: border-color 200ms; }
 .sk-phase:hover { border-color: var(--border-2); }
 .sk-phase__head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -1802,12 +2664,16 @@ export default function SkillsApp({ showNavbar = true }) {
 /* ── Items ── */
 .sk-item { display: flex; gap: 0.875rem; padding: 0.625rem 0.75rem; border: 1px solid var(--border); border-radius: 6px; transition: border-color 200ms, background 200ms; background: var(--bg-2); }
 .sk-item--book:hover { border-color: var(--orange-border); background: rgba(249,115,22,0.03); }
+.sk-item--book-read, .sk-item--doc-read, .sk-item--task-done, .sk-item--counter-done { background: rgba(16,185,129,0.06) !important; border-color: rgba(16,185,129,0.25) !important; }
+.sk-item--book-read:hover, .sk-item--doc-read:hover, .sk-item--task-done:hover, .sk-item--counter-done:hover { background: rgba(16,185,129,0.1) !important; border-color: rgba(16,185,129,0.4) !important; }
+.sk-book-read-badge { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.25rem 0.5rem; border-radius: 4px; background: var(--emerald-dim); border: 1px solid var(--emerald-border); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--emerald); width: fit-content; }
 .sk-item--doc:hover { border-color: var(--blue-border); background: rgba(59,130,246,0.03); }
 .sk-item--task:hover { border-color: var(--emerald-border); background: rgba(16,185,129,0.03); }
 .sk-item--counter { flex-direction: column; }
 .sk-item--counter:hover { border-color: var(--blue-border); }
-.sk-item--counter-purple:hover { border-color: var(--purple-border) !important; }
-.sk-item__cover-wrap { position: relative; flex-shrink: 0; }
+.sk-item__cover-wrap { position: relative; flex-shrink: 0; cursor: pointer; border-radius: 4px; overflow: hidden; transition: transform 160ms ease, box-shadow 160ms ease; user-select: none; }
+.sk-item__cover-wrap:hover { transform: scale(1.04); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55); }
+.sk-item__cover-wrap:active { transform: scale(0.97); }
 .sk-item__cover { width: 3rem; height: 4.25rem; object-fit: cover; border-radius: 4px; }
 @media (min-width: 640px) { .sk-item__cover { width: 3.5rem; height: 5rem; } }
 .sk-item__cover-overlay { position: absolute; inset: 0; background: linear-gradient(to top, rgba(0,0,0,0.7), transparent); opacity: 0; transition: opacity 200ms; border-radius: 4px; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 0.25rem; }
@@ -1866,12 +2732,15 @@ export default function SkillsApp({ showNavbar = true }) {
 .sk-modal { background: var(--bg-1); border: 1px solid var(--border-2); border-radius: 8px; width: 100%; display: flex; flex-direction: column; box-shadow: 0 0 60px rgba(0,0,0,0.6); overflow: hidden; max-height: 85vh; }
 .sk-modal--sm { max-width: 22rem; }
 .sk-modal--md { max-width: 28rem; }
-.sk-modal__head { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
+.sk-modal--type-picker { max-width: 28rem; width: 92%; height: auto; border-radius: 8px; }
+.sk-modal--form { max-width: 28rem; width: 90%; height: auto; border-radius: 8px; }
+.sk-modal--books { max-width: 52rem; width: 92%; height: 75vh; max-height: 75vh; border-radius: 8px; }
+.sk-modal__head { display: flex; align-items: center; justify-content: space-between; padding: 0.875rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
 .sk-modal__head--tiny { padding: 0.375rem 0.5rem; border-bottom: none; }
-.sk-modal__title { font-size: 0.7rem; font-weight: 800; color: var(--white); text-transform: uppercase; letter-spacing: 0.12em; font-family: 'IBM Plex Mono', monospace; }
+.sk-modal__title { font-size: 0.75rem; font-weight: 800; color: var(--white); text-transform: uppercase; letter-spacing: 0.12em; font-family: 'IBM Plex Mono', monospace; }
 .sk-modal__sub { font-size: 0.55rem; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.2rem; font-family: 'IBM Plex Mono', monospace; }
 .sk-modal__body { padding: 1rem; overflow-y: auto; }
-.sk-modal__foot { display: flex; align-items: center; justify-content: space-between; padding: 0.625rem 1rem; border-top: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
+.sk-modal__foot { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1.25rem; border-top: 1px solid var(--border); background: var(--bg); flex-shrink: 0; }
 .sk-modal__foot-right { display: flex; gap: 0.375rem; }
 .sk-modal__foot-left { display: flex; gap: 0.375rem; }
 
@@ -1923,47 +2792,105 @@ export default function SkillsApp({ showNavbar = true }) {
 .sk-icon--delete { color: var(--text-4); }
 .sk-icon--delete:hover { color: var(--red); }
 .sk-icon--blue { color: var(--blue); }
+.sk-icon--emerald { color: var(--emerald); }
 .sk-icon--orange { color: var(--orange); }
 .sk-icon--purple { color: var(--purple); }
 .sk-icon--white { color: var(--white); }
 .sk-icon--black { color: #000; }
 .sk-icon--muted { color: var(--text-3); }
 
-/* ── Type selector ── */
-.sk-type-grid { display: flex; flex-direction: column; gap: 0.375rem; }
-.sk-type-btn { display: flex; align-items: center; gap: 0.75rem; padding: 0.625rem 0.75rem; border-radius: 5px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; transition: all 150ms; text-align: left; }
-.sk-type-btn:hover { background: var(--bg-3); }
-.sk-type-btn--orange:hover { border-color: var(--orange-border); }
-.sk-type-btn--blue:hover { border-color: var(--blue-border); }
-.sk-type-btn--emerald:hover { border-color: var(--emerald-border); }
-.sk-type-btn__icon { width: 2rem; height: 2rem; border-radius: 4px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.sk-type-btn__icon--orange { background: var(--orange-dim); border: 1px solid var(--orange-border); }
-.sk-type-btn__icon--blue { background: var(--blue-dim); border: 1px solid var(--blue-border); }
-.sk-type-btn__icon--emerald { background: var(--emerald-dim); border: 1px solid var(--emerald-border); }
-.sk-type-btn__content { flex: 1; }
-.sk-type-btn__label { display: block; font-size: 0.725rem; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.08em; }
-.sk-type-btn__desc { display: block; font-size: 0.6rem; color: var(--text-3); margin-top: 0.1rem; font-family: 'IBM Plex Mono', monospace; }
+/* ── Step 1 Type Selector ── */
+.sk-type-list--picker { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.25rem 0; }
+.sk-type-btn--picker { display: flex; align-items: center; gap: 0.875rem; padding: 0.75rem 1rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; transition: all 160ms ease; text-align: left; }
+.sk-type-btn--picker:hover { background: var(--bg-3); transform: translateY(-1px); }
+.sk-type-btn--picker.sk-type-btn--orange:hover { border-color: var(--orange-border); }
+.sk-type-btn--picker.sk-type-btn--blue:hover { border-color: var(--blue-border); }
+.sk-type-btn--picker.sk-type-btn--emerald:hover { border-color: var(--emerald-border); }
+.sk-type-btn--picker.sk-type-btn--purple:hover { border-color: var(--purple-border); }
+.sk-type-btn__icon--picker { width: 2.25rem; height: 2.25rem; border-radius: 5px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sk-type-btn__icon--picker.sk-type-btn__icon--orange { background: var(--orange-dim); border: 1px solid var(--orange-border); }
+.sk-type-btn__icon--picker.sk-type-btn__icon--blue { background: var(--blue-dim); border: 1px solid var(--blue-border); }
+.sk-type-btn__icon--picker.sk-type-btn__icon--emerald { background: var(--emerald-dim); border: 1px solid var(--emerald-border); }
+.sk-type-btn__icon--picker.sk-type-btn__icon--purple { background: var(--purple-dim); border: 1px solid var(--purple-border); }
+.sk-type-btn__label--picker { display: block; font-size: 0.8125rem; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.15rem; font-family: 'IBM Plex Mono', monospace; }
+.sk-type-btn__desc--picker { display: block; font-size: 0.6875rem; color: var(--text-3); font-family: 'DM Sans', sans-serif; line-height: 1.35; }
 
-/* ── Toggle ── */
-.sk-toggle-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.375rem; }
-.sk-toggle { display: flex; align-items: center; justify-content: center; gap: 0.375rem; padding: 0.4rem; border-radius: 4px; font-size: 0.6rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; border: 1px solid var(--border); background: var(--bg-2); color: var(--text-3); cursor: pointer; font-family: 'IBM Plex Mono', monospace; transition: all 150ms; }
-.sk-toggle--blue { background: var(--blue-dim); border-color: var(--blue-border); color: var(--blue); }
-.sk-toggle--purple { background: var(--purple-dim); border-color: var(--purple-border); color: var(--purple); }
+/* ── Filter Bar (Strict 1-line alignment) ── */
+.sk-filter-bar { display: flex; align-items: stretch; gap: 0.5rem; margin-bottom: 0.75rem; height: 36px; width: 100%; }
+.sk-filter-control { height: 36px; min-height: 36px; max-height: 36px; box-sizing: border-box; margin: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); display: flex; align-items: center; transition: border-color 150ms; }
+.sk-filter-control:hover { border-color: var(--border-2); }
+.sk-filter-control:focus-within { border-color: var(--border-2); }
+.sk-filter-control--search { flex: 1; min-width: 180px; padding: 0 0.75rem; gap: 0.5rem; }
+.sk-filter-control--search .sk-search-input { flex: 1; height: 100%; border: none; background: transparent; outline: none; color: var(--text); font-size: 0.8125rem; font-family: 'DM Sans', sans-serif; padding: 0; margin: 0; line-height: 34px; }
+.sk-filter-control--search .sk-search-input::placeholder { color: var(--text-4); }
+.sk-filter-control--select { position: relative; width: 130px; padding: 0; background: transparent; border: none; }
+.sk-filter-control--select .sk-select { width: 100%; height: 36px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-2); color: var(--text-2); font-size: 0.75rem; font-weight: 600; font-family: 'DM Sans', sans-serif; padding: 0 1.75rem 0 0.75rem; margin: 0; outline: none; appearance: none; cursor: pointer; line-height: 34px; display: block; }
+.sk-filter-control--select .sk-select:hover { border-color: var(--border-2); background: var(--bg-3); color: var(--text); }
+.sk-filter-control--select .sk-select-arrow { position: absolute; right: 0.625rem; top: 50%; transform: translateY(-50%); pointer-events: none; display: flex; align-items: center; }
+.sk-filter-control--toggle { padding: 0 0.875rem; gap: 0.5rem; background: var(--bg-2); color: var(--text-3); font-size: 0.7rem; font-weight: 700; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.06em; cursor: pointer; white-space: nowrap; user-select: none; }
+.sk-filter-control--toggle:hover { background: var(--bg-3); color: var(--text); border-color: var(--border-2); }
+.sk-filter-control--toggle-active { background: var(--blue-dim) !important; border-color: var(--blue-border) !important; color: var(--blue) !important; }
+.sk-toggle-box { width: 0.95rem; height: 0.95rem; border-radius: 3px; border: 1px solid var(--border-2); display: flex; align-items: center; justify-content: center; background: var(--bg-3); flex-shrink: 0; }
+.sk-filter-control--toggle-active .sk-toggle-box { background: var(--blue); border-color: var(--blue); }
+.sk-toggle-count { opacity: 0.7; font-size: 0.625rem; }
 
-/* ── Book List ── */
-.sk-search-wrap { display: flex; align-items: center; gap: 0.5rem; background: var(--bg-2); border: 1px solid var(--border); border-radius: 5px; padding: 0.3rem 0.625rem; margin-bottom: 0.5rem; transition: border-color 150ms; }
-.sk-search-wrap:focus-within { border-color: var(--border-2); }
-.sk-search-icon { flex-shrink: 0; }
-.sk-search-input { flex: 1; background: transparent; border: none; outline: none; color: var(--text); font-size: 0.8125rem; font-family: 'DM Sans', sans-serif; }
-.sk-search-input::placeholder { color: var(--text-4); }
-.sk-search-clear { display: flex; align-items: center; justify-content: center; background: transparent; border: none; cursor: pointer; padding: 0.1rem; opacity: 0.6; transition: opacity 150ms; }
-.sk-search-clear:hover { opacity: 1; }
-.sk-book-list { display: flex; flex-direction: column; gap: 0.25rem; overflow-y: auto; overflow-x: hidden; max-height: 18rem; margin-bottom: 0.625rem; }
-.sk-book-row { display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.625rem; border-radius: 4px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; transition: all 150ms; }
-.sk-book-row:hover { border-color: var(--border-2); background: var(--bg-3); }
-.sk-book-row--selected { background: var(--orange-dim); border-color: var(--orange-border); }
-.sk-book-row__cover { width: 1.75rem; height: 1.75rem; object-fit: cover; border-radius: 2px; background: var(--bg-4); flex-shrink: 0; }
-.sk-book-row__title { flex: 1; font-size: 0.6875rem; font-weight: 600; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* ── Book List & Grid ── */
+.sk-book-list--grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0.875rem; overflow-y: auto; padding: 0.25rem 0.25rem 1rem 0.25rem; align-content: start; align-items: start; }
+.sk-book-card { display: flex; gap: 0.875rem; padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); cursor: pointer; transition: all 160ms ease; user-select: none; position: relative; height: fit-content; align-self: start; }
+.sk-book-card:hover { border-color: var(--border-2); background: var(--bg-3); transform: translateY(-1px); }
+.sk-book-card--selected { background: rgba(249,115,22,0.08) !important; border-color: var(--orange-border) !important; }
+.sk-book-card--selected-multi { background: rgba(59,130,246,0.12) !important; border-color: var(--blue-border) !important; }
+.sk-book-card__cover-wrap { width: 4.5rem; height: 6.25rem; position: relative; flex-shrink: 0; border-radius: 4px; overflow: hidden; background: var(--bg-4); border: 1px solid var(--border); }
+.sk-book-card__cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sk-book-card__content { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; min-height: 6.25rem; }
+.sk-book-card__title { font-size: 0.8125rem; font-weight: 700; color: var(--white); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-bottom: 0.375rem; }
+.sk-book-card__badges { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-top: 0.25rem; margin-bottom: 0.375rem; }
+
+/* ── Pills & Toggles ── */
+.sk-pill { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg-4); color: var(--text-2); border: 1px solid var(--border); font-family: 'IBM Plex Mono', monospace; }
+.sk-pill--reading { background: var(--orange-dim); color: var(--orange); border-color: var(--orange-border); }
+.sk-pill--read { background: var(--emerald-dim); color: var(--emerald); border-color: var(--emerald-border); }
+.sk-pill--want { background: var(--blue-dim); color: var(--blue); border-color: var(--blue-border); }
+.sk-pill--in-skill { background: rgba(255,255,255,0.08); color: var(--text-3); border-color: rgba(255,255,255,0.12); }
+
+/* ── Large screen scaling for 1200px+ (App size 1400px) ── */
+@media (min-width: 1200px) {
+  .sk-phase-list { max-width: 80rem; gap: 0.625rem; }
+  .sk-plan-bar__inner { max-width: 30rem; }
+  .sk-phase { border-radius: 8px; }
+  .sk-phase__head { padding: 0.5rem 0.875rem; }
+  .sk-phase__name { font-size: 0.75rem; }
+  .sk-phase__name-edit { font-size: 0.75rem; }
+  .sk-phase__badge { width: 1.5rem; height: 1.5rem; font-size: 0.55rem; }
+  .sk-phase-action { padding: 0.25rem 0.5rem; font-size: 0.65rem; }
+  .sk-mini-progress { gap: 0.5rem; }
+  .sk-mini-progress__track { width: 4.5rem; height: 3px; }
+  .sk-mini-progress__label { font-size: 0.625rem; }
+  .sk-phase__items { padding: 0.5rem; gap: 0.375rem; }
+  
+  /* Items inside phase: tastefully scaled up without being gigantic */
+  .sk-item { padding: 0.5rem 0.75rem; gap: 0.75rem; border-radius: 6px; }
+  .sk-item__cover { width: 4.25rem; height: 6rem; border-radius: 4px; }
+  .sk-item__cover-label { font-size: 0.55rem; }
+  .sk-item__title { font-size: 0.85rem; line-height: 1.35; }
+  .sk-item__type { font-size: 0.55rem; margin-top: 0.15rem; }
+  .sk-progress { margin-top: 0.5rem; gap: 0.625rem; }
+  .sk-progress__track { height: 4px; border-radius: 2px; }
+  .sk-progress__label { font-size: 0.7rem; min-width: 2.25rem; }
+  .sk-num-input { padding: 0.15rem 0.5rem; gap: 0.25rem; }
+  .sk-num-input__field { width: 3rem; font-size: 0.8125rem; padding: 0.15rem 0; }
+  .sk-num-input__max { font-size: 0.65rem; }
+  .sk-book-read-badge { padding: 0.25rem 0.5rem; font-size: 0.6875rem; }
+  .sk-task-text { font-size: 0.85rem; line-height: 1.45; }
+  .sk-checkbox-wrap { margin-top: 0.15rem; }
+  .sk-checkbox { width: 1.15rem; height: 1.15rem; border-radius: 4px; }
+  .sk-counter__num { font-size: 1.75rem; }
+  .sk-counter__max { font-size: 0.65rem; }
+  .sk-counter__icon-wrap { width: 2.25rem; height: 2.25rem; border-radius: 5px; }
+  .sk-counter__inc { width: 2rem; height: 2rem; }
+  .sk-counter__inc-sm { width: 1.4rem; height: 1.4rem; }
+  .sk-icon-btn { width: 1.625rem; height: 1.625rem; }
+}
 
 /* ── Dropzone ── */
 .sk-dropzone { width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 2rem 1rem; border: 1px dashed var(--border-2); border-radius: 6px; background: var(--bg-2); cursor: pointer; transition: all 150ms; }

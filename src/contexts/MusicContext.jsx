@@ -440,7 +440,7 @@ export const MusicProvider = ({ children }) => {
 
             // Restore Playback session
             if (window._initialMusicState) {
-                const { playingSongsPaths, playingIndexPath, currentTime } = window._initialMusicState;
+                const { playingSongsPaths, playingIndexPath, currentTime, isPlaying } = window._initialMusicState;
                 const allLoaded = [...rootSongsList, ...playlistsList.flatMap(p => p.songs)];
                 if (playingSongsPaths) {
                     const restored = playingSongsPaths.map(p => allLoaded.find(s => s.path === p)).filter(Boolean);
@@ -451,6 +451,14 @@ export const MusicProvider = ({ children }) => {
                             setPlayingIndex(idx);
                             audioRef.current.src = restored[idx].url;
                             audioRef.current.currentTime = currentTime;
+                            if (isPlaying) {
+                                audioRef.current.play()
+                                    .then(() => setIsPlaying(true))
+                                    .catch(e => {
+                                        console.error("[Music] Autoplay prevented", e);
+                                        setIsPlaying(false);
+                                    });
+                            }
                         }
                     }
                 }

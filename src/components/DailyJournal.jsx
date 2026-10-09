@@ -234,10 +234,23 @@ const DailyJournal = () => {
     const [activeEntry, setActiveEntry] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+    const [isLargeScreen, setIsLargeScreen] = useState(() => typeof window !== 'undefined' && window.innerWidth >= 1200);
     const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'oldest' | 'wordCount'
     const [showTJournalOnly, setShowTJournalOnly] = useState(false);
     const [showGoalsOnly, setShowGoalsOnly] = useState(false);
     const [goalJournalIds, setGoalJournalIds] = useState(new Set());
+
+    useEffect(() => {
+        const handleResize = () => {
+            const large = window.innerWidth >= 1200;
+            setIsLargeScreen(large);
+            if (large) {
+                setIsSidebarOpen(true);
+            }
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+    }, []);
 
     // Load entries on mount
     useEffect(() => {
@@ -302,7 +315,7 @@ const DailyJournal = () => {
                 const matchingEntry = validEntries.find(e => e.title === stateTitle);
                 if (matchingEntry) {
                     setActiveEntry(matchingEntry);
-                    if (isSidebarOpen) setIsSidebarOpen(false);
+                    if (!isLargeScreen && isSidebarOpen) setIsSidebarOpen(false);
                 } else if (validEntries.length > 0 && !activeEntry) {
                     setActiveEntry(validEntries[0]);
                 }
@@ -357,8 +370,8 @@ const DailyJournal = () => {
     const updateEntry = useCallback(async (updates) => {
         if (!activeEntry) return;
 
-        // Auto-retract sidebar on typing/update
-        if (isSidebarOpen) setIsSidebarOpen(false);
+        // Auto-retract sidebar on typing/update only on smaller screens
+        if (!isLargeScreen && isSidebarOpen) setIsSidebarOpen(false);
 
         const updatedEntry = { ...activeEntry, ...updates, updatedAt: new Date().toISOString() };
 
@@ -368,7 +381,7 @@ const DailyJournal = () => {
 
         // Save to disk
         await saveEntryToDisk(updatedEntry);
-    }, [activeEntry]);
+    }, [activeEntry, isLargeScreen, isSidebarOpen]);
 
     const filteredEntries = useMemo(() => {
         return entries
@@ -403,8 +416,8 @@ const DailyJournal = () => {
             {/* Navbar */}
             <Navbar />
 
-            {/* Sidebar Toggle Button (when sidebar is closed) */}
-            {!isSidebarOpen && (
+            {/* Sidebar Toggle Button (when sidebar is closed on smaller screens) */}
+            {!isLargeScreen && !isSidebarOpen && (
                 <button
                     onClick={() => setIsSidebarOpen(true)}
                     className="absolute top-4 left-12 z-20 p-2 bg-white dark:bg-neutral-800 rounded-full shadow-md text-neutral-500 hover:text-blue-600 dark:text-neutral-400 transition-all border border-neutral-200 dark:border-neutral-700 hover:scale-105 cursor-pointer flex items-center justify-center"
@@ -417,8 +430,10 @@ const DailyJournal = () => {
             {/* Sidebar */}
             <aside
                 className={cn(
-                    "bg-white/95 dark:bg-neutral-950/95 backdrop-blur-md border-r border-neutral-200 dark:border-neutral-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out h-full absolute z-30",
-                    isSidebarOpen ? "w-60 md:w-72 translate-x-0 opacity-100 shadow-2xl" : "w-0 -translate-x-full opacity-0 pointer-events-none"
+                    "bg-white/95 dark:bg-neutral-950/95 backdrop-blur-md border-r border-neutral-200 dark:border-neutral-800 flex flex-col shrink-0 transition-all duration-300 ease-in-out h-full z-30",
+                    isLargeScreen
+                        ? "relative w-64 md:w-72 translate-x-0 opacity-100 shadow-none pointer-events-auto"
+                        : (isSidebarOpen ? "absolute w-60 md:w-72 translate-x-0 opacity-100 shadow-2xl" : "absolute w-0 -translate-x-full opacity-0 pointer-events-none")
                 )}
             >
                 <div className="p-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between overflow-hidden">
@@ -434,13 +449,15 @@ const DailyJournal = () => {
                         >
                             <img src={plusIcon} className="w-4 h-4 brightness-0 invert" />
                         </button>
-                        <button
-                            onClick={() => setIsSidebarOpen(false)}
-                            className="p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 rounded-full transition-all shrink-0 cursor-pointer flex items-center justify-center"
-                            title="Close Sidebar"
-                        >
-                            <img src={panelLeftCloseIcon} className="w-4 h-4 opacity-50 dark:invert" />
-                        </button>
+                        {!isLargeScreen && (
+                            <button
+                                onClick={() => setIsSidebarOpen(false)}
+                                className="p-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-500 rounded-full transition-all shrink-0 cursor-pointer flex items-center justify-center"
+                                title="Close Sidebar"
+                            >
+                                <img src={panelLeftCloseIcon} className="w-4 h-4 opacity-50 dark:invert" />
+                            </button>
+                        )}
                     </div>
                 </div>
 
@@ -503,7 +520,7 @@ const DailyJournal = () => {
                                 key={entry.id}
                                 onClick={() => {
                                     setActiveEntry(entry);
-                                    setIsSidebarOpen(false);
+                                    if (!isLargeScreen) setIsSidebarOpen(false);
                                     navigate('/DailyJournal', { replace: true, state: {} });
                                 }}
                                 className={cn(
@@ -550,6 +567,7 @@ const DailyJournal = () => {
                         onUpdate={updateEntry}
                         isSidebarOpen={isSidebarOpen}
                         setIsSidebarOpen={setIsSidebarOpen}
+                        isLargeScreen={isLargeScreen}
                         navActions={location.state?.fromGoal && activeEntry.title === location.state?.targetTitle ? {
                             backToGoals: () => navigate('/Growth/goals'),
                             goalId: location.state?.goalId,
@@ -588,7 +606,7 @@ const DailyJournal = () => {
     );
 };
 
-const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, navActions }) => {
+const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, isLargeScreen, navActions }) => {
     const [title, setTitle] = useState(entry.title);
     const [spacing, setSpacing] = useState('compact'); // compact | normal | relaxed
 
@@ -630,7 +648,7 @@ const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, navActio
             setSelectionUpdate(s => s + 1);
         },
         onFocus: () => {
-            if (isSidebarOpen) setIsSidebarOpen(false);
+            if (!isLargeScreen && isSidebarOpen) setIsSidebarOpen(false);
         },
         editorProps: {
             attributes: {
@@ -638,14 +656,26 @@ const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, navActio
                 dir: 'ltr'
             },
             handleTextInput(view, from, to, text) {
+                const { state, dispatch } = view;
+                const { selection } = state;
+                const $pos = selection.$from;
+                const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
+
+                // Autocorrect isolated 'i' to 'I' when followed by a space
+                if (text === ' ') {
+                    if (/(^|\s)i$/.test(textBefore)) {
+                        const tr = state.tr
+                            .delete(from - 1, to)
+                            .insertText('I ', from - 1);
+                        dispatch(tr);
+                        return true;
+                    }
+                }
+
                 // Only handle single character inputs that are lowercase letters
                 if (text.length !== 1 || !/[a-z]/.test(text)) {
                     return false;
                 }
-
-                const { state, dispatch } = view;
-                const { selection } = state;
-                const $pos = selection.$from;
 
                 // 1. Check if we are at the very beginning of a block (like a new paragraph)
                 const isStartOfBlock = $pos.parentOffset === 0;
@@ -653,7 +683,6 @@ const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, navActio
                 // 2. Check if we follow a sentence ender (. ! ?) and at least one space
                 let isAfterSentenceEnd = false;
                 if (!isStartOfBlock) {
-                    const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
                     // Match a sentence ender followed by spaces
                     if (/[.!?]\s+$/.test(textBefore)) {
                         isAfterSentenceEnd = true;
@@ -798,12 +827,17 @@ const EditorArea = ({ entry, onUpdate, isSidebarOpen, setIsSidebarOpen, navActio
             `}</style>
 
             <div className="flex-1 overflow-y-auto">
-                <div className="max-w-4xl mx-auto py-8 px-4 md:px-8">
+                <div className={cn(
+                    "py-8 transition-all duration-200",
+                    isLargeScreen
+                        ? "w-full max-w-none mx-0 pl-5 pr-4"
+                        : "max-w-4xl mx-auto px-4 md:px-8"
+                )}>
                     <input
                         type="text"
                         value={title}
                         onChange={handleTitleChange}
-                        onFocus={() => { if (isSidebarOpen) setIsSidebarOpen(false); }}
+                        onFocus={() => { if (!isLargeScreen && isSidebarOpen) setIsSidebarOpen(false); }}
                         placeholder="Title"
                         className="w-full text-4xl font-bold bg-transparent border-none outline-none text-neutral-900 dark:text-neutral-100 placeholder-neutral-300 dark:placeholder-neutral-700 mb-2"
                     />

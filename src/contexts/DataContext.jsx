@@ -13,6 +13,7 @@ const PATHS = {
     READING_DIR: path.join(BASE_DB, 'Books', 'Reading'),
     READING_PROGRESS_DIR: path.join(BASE_DB, 'Books', 'Progress'),
     READING_NOTES_DIR: path.join(BASE_DB, 'Books', 'notes'),
+    READING_LOGS_FILE: path.join(BASE_DB, 'Books', 'reading_logs.json'),
     BOOK_CACHE_DIR: path.join(BASE_DB, 'Books', 'BookCache'),
     ARTICLE_CACHE_DIR: path.join(BASE_DB, 'Articles', 'ArticleCache'),
     TIME_SESSIONS: path.join(BASE_DB, 'TimeTracker', 'sessions.json'),
@@ -129,7 +130,7 @@ export const DataProvider = ({ children }) => {
             } catch (e) { }
 
             // 3. READING
-            let readingData = { currentBook: null, progress: 0, cover: null, totalBooks: 0, shelves: { Reading: [], WanttoRead: [], Read: [] }, categories: [] };
+            let readingData = { currentBook: null, progress: 0, cover: null, totalBooks: 0, shelves: { Reading: [], WanttoRead: [], Read: [] }, categories: [], readingLogs: [] };
             try {
                 const baseBookPath = path.join(BASE_DB, 'Books');
                 const shelfNames = ['Reading', 'WanttoRead', 'Read'];
@@ -140,7 +141,7 @@ export const DataProvider = ({ children }) => {
                 try { await fs.mkdir(bookCacheDir, { recursive: true }); } catch (e) { }
 
                 // Helper: load a single PDF book entry
-                const loadBookEntry = async (file, dir, category) => {
+                const loadBookEntry = async (file, dir, category, currentShelf) => {
                     const name = file.replace('.pdf', '');
                     const fullPath = path.join(dir, file);
                     let createdAt = new Date(0);
@@ -148,7 +149,11 @@ export const DataProvider = ({ children }) => {
 
                     try {
                         const stats = await fs.stat(fullPath);
-                        createdAt = stats.birthtime;
+                        const folderTime = Math.max(
+                            stats.ctime ? stats.ctime.getTime() : 0,
+                            stats.mtime ? stats.mtime.getTime() : 0
+                        );
+                        createdAt = new Date(folderTime);
                         lastUpdated = stats.mtime;
                     } catch (e) { }
 
@@ -191,16 +196,23 @@ export const DataProvider = ({ children }) => {
                         if (notesStats.mtime > lastUpdated) lastUpdated = notesStats.mtime;
                     } catch (e) { }
 
-                    // For WanttoRead/Read shelves, pull totalPages from BookCache if available
+                    // For WanttoRead/Read shelves, pull totalPages and addedToShelfAt from BookCache if available
                     let totalPages = progress.total || 0;
-                    if (totalPages === 0) {
-                        try {
-                            const bookCachePath = path.join(bookCacheDir, `${name}.json`);
-                            const rawCache = await fs.readFile(bookCachePath, 'utf8');
-                            const cached = JSON.parse(rawCache);
-                            if (cached.totalPages) totalPages = cached.totalPages;
-                        } catch (e) { }
-                    }
+                    try {
+                        const bookCachePath = path.join(bookCacheDir, `${name}.json`);
+                        const rawCache = await fs.readFile(bookCachePath, 'utf8');
+                        const cached = JSON.parse(rawCache);
+                        if (cached.totalPages) totalPages = cached.totalPages;
+                        if (currentShelf && cached.shelf === currentShelf) {
+                            const cacheTimeStr = cached.addedToShelfAt || cached.createdAt;
+                            if (cacheTimeStr) {
+                                const cacheTime = new Date(cacheTimeStr);
+                                if (!isNaN(cacheTime.getTime()) && cacheTime.getTime() > 0) {
+                                    createdAt = cacheTime;
+                                }
+                            }
+                        }
+                    } catch (e) { }
 
                     return { name, fullPath, cover, progress, createdAt, lastUpdated, cachedOnly: false, totalPages, category };
                 };
@@ -216,7 +228,7 @@ export const DataProvider = ({ children }) => {
                         subdirs.forEach(d => allCategories.add(d.name));
 
                         // Load root-level books (category = null)
-                        const rootBooks = await processInChunks(pdfs, e => loadBookEntry(e.name, shelfPath, null));
+                        const rootBooks = await processInChunks(pdfs, e => loadBookEntry(e.name, shelfPath, null, shelf));
 
                         // Load books from each subcategory folder
                         let subBooks = [];
@@ -225,7 +237,7 @@ export const DataProvider = ({ children }) => {
                             try {
                                 const catFiles = await fs.readdir(catPath);
                                 const catPdfs = catFiles.filter(f => f.toLowerCase().endsWith('.pdf'));
-                                const catBooks = await processInChunks(catPdfs, f => loadBookEntry(f, catPath, dir.name));
+                                const catBooks = await processInChunks(catPdfs, f => loadBookEntry(f, catPath, dir.name, shelf));
                                 subBooks = subBooks.concat(catBooks);
                             } catch (e) { }
                         }
@@ -273,7 +285,7 @@ export const DataProvider = ({ children }) => {
                                             fullPath: cached.originalPath || path.join(shelfPath, cached.name + '.pdf'),
                                             cover,
                                             progress,
-                                            createdAt: new Date(cached.createdAt || cached.cachedAt || 0),
+                                            createdAt: new Date(cached.addedToShelfAt || cached.createdAt || cached.cachedAt || 0),
                                             lastUpdated: new Date(cached.lastUpdated || cached.cachedAt || 0),
                                             cachedOnly: true,
                                             totalPages: cached.totalPages || 0,
@@ -284,11 +296,23 @@ export const DataProvider = ({ children }) => {
                             } catch (e) { }
                         }
 
-                        readingData.shelves[shelf] = mergedBooks.sort((a, b) => b.lastUpdated - a.lastUpdated);
+                        readingData.shelves[shelf] = mergedBooks.sort((a, b) => {
+                            const timeA = a.createdAt ? a.createdAt.getTime() : 0;
+                            const timeB = b.createdAt ? b.createdAt.getTime() : 0;
+                            if (timeB !== timeA) return timeB - timeA;
+                            return a.name.localeCompare(b.name);
+                        });
                     } catch (e) { }
                 }
 
                 readingData.categories = Array.from(allCategories).sort();
+
+                try {
+                    const rawLogs = await fs.readFile(PATHS.READING_LOGS_FILE, 'utf8');
+                    readingData.readingLogs = JSON.parse(rawLogs);
+                } catch (e) {
+                    readingData.readingLogs = [];
+                }
 
                 // Dashboard Stats
                 const readingBooks = readingData.shelves.Reading;
@@ -367,8 +391,17 @@ export const DataProvider = ({ children }) => {
                 const allSkills = [];
 
                 for (const f of jsonFiles) {
-                    const raw = await fs.readFile(path.join(PATHS.SKILLS_DIR, f), 'utf8');
+                    const fullPath = path.join(PATHS.SKILLS_DIR, f);
+                    const raw = await fs.readFile(fullPath, 'utf8');
                     const skill = JSON.parse(raw);
+                    
+                    try {
+                        const stats = await fs.stat(fullPath);
+                        skill.createdAt = skill.createdAt || stats.birthtimeMs || stats.mtimeMs || 0;
+                    } catch (e) {
+                        skill.createdAt = skill.createdAt || 0;
+                    }
+
                     allSkills.push(skill);
 
                     if (skill.phases) {
@@ -509,14 +542,18 @@ export const DataProvider = ({ children }) => {
                 const articleShelfNames = ['Reading', 'WanttoRead', 'Read'];
                 const articleCategories = new Set();
 
-                const loadArticleEntry = async (file, dir, category) => {
+                const loadArticleEntry = async (file, dir, category, currentShelf) => {
                     const name = file.replace(/\.pdf$/i, '');
                     const fullPath = path.join(dir, file);
                     let createdAt = new Date(0);
                     let lastUpdated = new Date(0);
                     try {
                         const stats = await fs.stat(fullPath);
-                        createdAt = stats.birthtime;
+                        const folderTime = Math.max(
+                            stats.ctime ? stats.ctime.getTime() : 0,
+                            stats.mtime ? stats.mtime.getTime() : 0
+                        );
+                        createdAt = new Date(folderTime);
                         lastUpdated = stats.mtime;
                     } catch (e) { }
 
@@ -549,6 +586,23 @@ export const DataProvider = ({ children }) => {
                         progress = JSON.parse(rawProg);
                     } catch (e) { }
 
+                    // Check ArticleCache for shelf-specific addedToShelfAt or createdAt timestamp
+                    try {
+                        const articleCacheDir = PATHS.ARTICLE_CACHE_DIR;
+                        const articleCachePath = path.join(articleCacheDir, `${name}.json`);
+                        const rawCache = await fs.readFile(articleCachePath, 'utf8');
+                        const cached = JSON.parse(rawCache);
+                        if (currentShelf && cached.shelf === currentShelf) {
+                            const cacheTimeStr = cached.addedToShelfAt || cached.createdAt;
+                            if (cacheTimeStr) {
+                                const cacheTime = new Date(cacheTimeStr);
+                                if (!isNaN(cacheTime.getTime()) && cacheTime.getTime() > 0) {
+                                    createdAt = cacheTime;
+                                }
+                            }
+                        }
+                    } catch (e) { }
+
                     return { name, fullPath, cover, createdAt, lastUpdated, category, progress };
                 };
 
@@ -561,7 +615,7 @@ export const DataProvider = ({ children }) => {
 
                         subdirs.forEach(d => articleCategories.add(d.name));
 
-                        const rootArticles = await processInChunks(pdfs, e => loadArticleEntry(e.name, shelfPath, null));
+                        const rootArticles = await processInChunks(pdfs, e => loadArticleEntry(e.name, shelfPath, null, shelf));
                         const articleCacheDir = PATHS.ARTICLE_CACHE_DIR;
                         try { await fs.mkdir(articleCacheDir, { recursive: true }); } catch (e) { }
 
@@ -571,7 +625,7 @@ export const DataProvider = ({ children }) => {
                             try {
                                 const catFiles = await fs.readdir(catPath);
                                 const catPdfs = catFiles.filter(f => f.toLowerCase().endsWith('.pdf'));
-                                const catArticles = await processInChunks(catPdfs, f => loadArticleEntry(f, catPath, dir.name));
+                                const catArticles = await processInChunks(catPdfs, f => loadArticleEntry(f, catPath, dir.name, shelf));
                                 subArticles = subArticles.concat(catArticles);
                             } catch (e) { }
                         }
@@ -613,7 +667,7 @@ export const DataProvider = ({ children }) => {
                                         fullPath: cached.originalPath || path.join(shelfPath, cached.name + '.pdf'),
                                         cover,
                                         progress,
-                                        createdAt: new Date(cached.createdAt || cached.cachedAt || 0),
+                                        createdAt: new Date(cached.addedToShelfAt || cached.createdAt || cached.cachedAt || 0),
                                         lastUpdated: new Date(cached.lastUpdated || cached.cachedAt || 0),
                                         cachedOnly: true,
                                         category: cached.category || null,
@@ -623,7 +677,12 @@ export const DataProvider = ({ children }) => {
                             } catch (e) { }
                         }
 
-                        articlesData.shelves[shelf] = mergedArticles.sort((a, b) => b.lastUpdated - a.lastUpdated);
+                        articlesData.shelves[shelf] = mergedArticles.sort((a, b) => {
+                            const timeA = a.createdAt ? a.createdAt.getTime() : 0;
+                            const timeB = b.createdAt ? b.createdAt.getTime() : 0;
+                            if (timeB !== timeA) return timeB - timeA;
+                            return a.name.localeCompare(b.name);
+                        });
                     } catch (e) { }
                 }
 

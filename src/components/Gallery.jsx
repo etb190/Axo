@@ -12,7 +12,7 @@ import playIcon from '../assets/icons/play.svg';
 import plusIcon from '../assets/icons/plus.svg';
 
 // ─── Config ───────────────────────────────────────────────────────
-const GALLERY_PATH = 'E:\\Gallery';
+const GALLERY_PATH = 'C:\\Users\\PC\\Desktop\\Database\\Gallery';
 const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'avif', 'ico', 'tiff'];
 const VIDEO_EXTS = ['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv', 'wmv'];
 const ALL_MEDIA_EXTS = [...IMAGE_EXTS, ...VIDEO_EXTS];
@@ -869,7 +869,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
                 const start = Math.min(lastSelectedIndex, index);
                 const end = Math.max(lastSelectedIndex, index);
                 const range = allItems.slice(start, end + 1);
-                
+
                 const newMap = new Map();
                 // Preserve previous selection from other views/albums
                 prev.forEach(s => newMap.set(s.path, s));
@@ -921,7 +921,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
         const path = window.require('path');
         const targetDir = path.join(GALLERY_PATH, targetAlbumName);
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-        
+
         const itemsToMove = [...selectedItems];
         clearSelection();
 
@@ -929,7 +929,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
             const dest = path.join(targetDir, path.basename(item.path));
             try { await fs.promises.rename(item.path, dest); } catch (e) { console.error(`Move error:`, e); }
         }));
-        
+
         // Small delay to allow FS to settle before re-scanning
         setTimeout(scanGallery, 300);
     }, [selectedItems, clearSelection, scanGallery]);
@@ -939,7 +939,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
         const path = window.require('path');
         const targetDir = path.join(GALLERY_PATH, targetAlbumName);
         if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
-        
+
         const itemsToCopy = [...selectedItems];
         clearSelection();
 
@@ -947,7 +947,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
             const dest = path.join(targetDir, path.basename(item.path));
             try { await fs.promises.copyFile(item.path, dest); } catch (e) { console.error(`Copy error:`, e); }
         }));
-        
+
         setTimeout(scanGallery, 300);
     }, [selectedItems, clearSelection, scanGallery]);
 
@@ -956,7 +956,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
             const fs = window.require('fs');
             const itemsToDelete = [...selectedItems];
             const pathsToDelete = new Set(itemsToDelete.map(s => s.path));
-            
+
             clearSelection();
 
             // Use sync unlinks for mass operations to avoid race conditions with re-scanning
@@ -970,7 +970,7 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
                     console.error(`Delete error for ${item.path}:`, e);
                 }
             }
-            
+
             // Immediate optimistic UI update
             setAlbums(prev => prev.map(album => ({
                 ...album,
@@ -1141,9 +1141,9 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
                                     type="text"
                                     placeholder="Search albums..."
                                     value={search}
-                                    onChange={(e) => { 
-                                        setSearch(e.target.value); 
-                                        clearSelection(); 
+                                    onChange={(e) => {
+                                        setSearch(e.target.value);
+                                        clearSelection();
                                     }}
                                     className="bg-zinc-900/80 border border-zinc-800/80 text-xs font-medium rounded-md px-2 py-1.5 w-44 outline-none focus:border-zinc-600 transition-all text-white placeholder:text-zinc-600"
                                 />
@@ -1288,9 +1288,9 @@ const Gallery = ({ showNavbar = true, onViewingMedia }) => {
                                     type="text"
                                     placeholder="Search media..."
                                     value={search}
-                                    onChange={(e) => { 
-                                        setSearch(e.target.value); 
-                                        clearSelection(); 
+                                    onChange={(e) => {
+                                        setSearch(e.target.value);
+                                        clearSelection();
                                     }}
                                     className="bg-zinc-900/80 border border-zinc-800/80 text-xs font-medium rounded-md px-2 py-1.5 w-44 outline-none focus:border-zinc-600 transition-all text-white placeholder:text-zinc-600"
                                 />

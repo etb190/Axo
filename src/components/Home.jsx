@@ -130,8 +130,9 @@ const Home = () => {
     const formatDate = (date) => date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     const formatTime = (date) => date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
     const formatTimeRemaining = (totalMin) => {
-        const h = Math.floor(totalMin / 60);
-        const m = Math.round(totalMin % 60);
+        const safeMin = Math.max(0, Math.round(totalMin));
+        const h = Math.floor(safeMin / 60);
+        const m = safeMin % 60;
         if (h > 0 && m > 0) return `${h}h ${m}m`;
         if (h > 0) return `${h}h`;
         return `${m}m`;
@@ -326,9 +327,12 @@ const Home = () => {
                     >
                         <div className="h-full flex flex-col justify-between py-1">
                             {data.planner.currentTask ? (() => {
-                                const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+                                let currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+                                if (currentTime.getHours() < 5) {
+                                    currentMinutes += 1440;
+                                }
                                 const task = data.planner.currentTask;
-                                const remaining = task.endMinutes - currentMinutes;
+                                const remaining = Math.max(0, task.endMinutes - currentMinutes);
                                 const duration = task.endMinutes - task.startMinutes;
                                 const formatMins = (m) => {
                                     const h = Math.floor(m / 60) % 24;
@@ -339,16 +343,16 @@ const Home = () => {
                                 return (
                                     <div className="space-y-3">
                                         <div>
-                                            <div className="flex justify-between items-start mb-1.5">
-                                                <span className="text-[9px] font-black uppercase text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded tracking-widest">Active Now</span>
-                                                <span className="text-[10px] font-bold text-blue-500/80 font-mono">{formatTimeRemaining(remaining)} left</span>
-                                            </div>
-                                            <div className="text-sm font-bold leading-tight line-clamp-1">{task.taskName}</div>
-                                            <div className="flex items-center gap-2 mt-1 text-[9px] text-neutral-500 font-bold uppercase tracking-tighter">
-                                                <span>{formatMins(task.startMinutes)} — {formatMins(task.endMinutes)}</span>
-                                                <span className="w-1 h-1 bg-neutral-700 rounded-full"></span>
-                                                <span>{formatTimeRemaining(duration)}</span>
-                                            </div>
+                                             <div className="flex justify-between items-start mb-1.5">
+                                                 <span className="text-[9px] font-black uppercase text-blue-400 bg-blue-400/10 px-1.5 py-0.5 rounded tracking-widest">Active Now</span>
+                                                 <span className="text-[10px] font-bold text-blue-500/80 font-mono">{formatTimeRemaining(remaining)} left</span>
+                                             </div>
+                                             <div className="text-sm font-bold leading-tight line-clamp-1">{task.taskName}</div>
+                                             <div className="flex items-center gap-2 mt-1 text-[9px] text-neutral-500 font-bold uppercase tracking-tighter">
+                                                 <span>{formatMins(task.startMinutes)} — {formatMins(task.endMinutes)}</span>
+                                                 <span className="w-1 h-1 bg-neutral-700 rounded-full"></span>
+                                                 <span>{formatTimeRemaining(duration)}</span>
+                                             </div>
                                         </div>
                                         <div className="h-px bg-white/5" />
                                     </div>
@@ -361,9 +365,15 @@ const Home = () => {
                             )}
 
                             {data.planner.nextTask ? (() => {
-                                const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+                                let currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
+                                if (currentTime.getHours() < 5) {
+                                    currentMinutes += 1440;
+                                }
                                 const task = data.planner.nextTask;
-                                const wait = task.startMinutes - currentMinutes;
+                                let wait = task.startMinutes - currentMinutes;
+                                if (wait < 0) {
+                                    wait = (wait + 1440) % 1440;
+                                }
                                 const duration = task.endMinutes - task.startMinutes;
                                 const formatMins = (m) => {
                                     const h = Math.floor(m / 60) % 24;

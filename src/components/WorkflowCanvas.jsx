@@ -348,6 +348,7 @@ const WorkflowCanvas = ({ showNavbar = true }) => {
     const moveStartSnapshotRef = useRef(null);
     const mousePosRef = useRef({ x: 0, y: 0 });
     const sidebarInputRef = useRef(null);
+    const lastSidebarNodeIdRef = useRef(null);
 
 
     const clipboardRef = useRef({ nodes: [], connections: [] });
@@ -1898,10 +1899,16 @@ const WorkflowCanvas = ({ showNavbar = true }) => {
             <div
                 onMouseDown={(e) => e.stopPropagation()}
                 onMouseUp={(e) => e.stopPropagation()}
-                className={`fixed top-0 right-0 h-full w-80 bg-zinc-950/95 backdrop-blur-xl border-l border-white/10 shadow-2xl transform z-[70] ${isInteracting ? '' : 'transition-transform duration-300'} ${showSidebar ? 'translate-x-0' : 'translate-x-full invisible'}`}
+                className={`fixed top-0 right-0 h-full w-80 bg-zinc-950/95 backdrop-blur-xl border-l border-white/10 shadow-2xl transform z-[70] transition-transform duration-300 ${showSidebar ? 'translate-x-0' : 'translate-x-full'}`}
             >
-                {showSidebar && (() => {
-                    const node = nodes.find(n => n.id === selectedNodeIds[0]);
+                {(() => {
+                    let node = nodes.find(n => n.id === sidebarOpenNodeId);
+                    if (!node && lastSidebarNodeIdRef.current) {
+                        node = nodes.find(n => n.id === lastSidebarNodeIdRef.current);
+                    }
+                    if (node) {
+                        lastSidebarNodeIdRef.current = node.id;
+                    }
                     if (!node) return null;
                     const theme = COLORS[node.color] || COLORS.blue;
 
@@ -1927,6 +1934,12 @@ const WorkflowCanvas = ({ showNavbar = true }) => {
                                         value={node.title}
                                         onFocus={() => pushToHistory(nodes, connections)}
                                         onChange={(e) => updateNode(node.id, { title: e.target.value })}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                if (sidebarInputRef.current) sidebarInputRef.current.blur();
+                                                setSidebarOpenNodeId(null);
+                                            }
+                                        }}
                                         className="w-full bg-zinc-900/50 border border-zinc-800 rounded-lg px-4 py-3 text-sm text-white focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all font-bold select-text"
                                         placeholder="Enter node title..."
                                     />

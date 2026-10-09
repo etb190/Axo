@@ -71,6 +71,7 @@ function Timetracker() {
     });
 
     const [taskTotals, setTaskTotals] = useState({})
+    const [heatmapTooltip, setHeatmapTooltip] = useState(null);
 
     const createSessionRef = useRef(null);
     const taskListRef = useRef(null);
@@ -113,13 +114,16 @@ function Timetracker() {
 
                 let totalWeek = sumDuration((s, sd) => {
                     const startOfWeek = new Date(now);
-                    startOfWeek.setDate(now.getDate() - 6);
+                    const day = startOfWeek.getDay();
+                    const diff = startOfWeek.getDate() - day + (day === 0 ? -6 : 1);
+                    startOfWeek.setDate(diff);
                     startOfWeek.setHours(0, 0, 0, 0);
                     return sd >= startOfWeek && sd <= now;
                 });
 
                 let totalMonth = sumDuration((s, sd) => {
-                    return sd.getMonth() === now.getMonth() && sd.getFullYear() === now.getFullYear();
+                    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+                    return sd >= startOfMonth && sd <= now;
                 });
 
                 let totalYear = sumDuration((s, sd) => sd.getFullYear() === now.getFullYear());
@@ -826,20 +830,22 @@ function Timetracker() {
     const [editStopHour, setEditStopHour] = useState('')
     const [editStopMinute, setEditStopMinute] = useState('')
     const [editStopDate, setEditStopDate] = useState('')
+    const [editTaskName, setEditTaskName] = useState('')
 
     // Pre-fill edit fields when a session is selected
     useEffect(() => {
         if (selectedSession) {
+            setEditTaskName(selectedSession.taskName || '');
             const start = new Date(selectedSession.startTime);
             setEditStartHour(String(start.getHours()).padStart(2, '0'));
             setEditStartMinute(String(start.getMinutes()).padStart(2, '0'));
-            setEditStartDate(start.toISOString().split('T')[0]);
+            setEditStartDate(getYMD(start));
 
             if (selectedSession.stopTime) {
                 const stop = new Date(selectedSession.stopTime);
                 setEditStopHour(String(stop.getHours()).padStart(2, '0'));
                 setEditStopMinute(String(stop.getMinutes()).padStart(2, '0'));
-                setEditStopDate(stop.toISOString().split('T')[0]);
+                setEditStopDate(getYMD(stop));
             } else {
                 setEditStopHour('');
                 setEditStopMinute('');
@@ -847,6 +853,38 @@ function Timetracker() {
             }
         }
     }, [selectedSession]);
+
+    const handleOpenActiveSessionEdit = async () => {
+        if (running && selectedTask) {
+            try {
+                const allSessions = await fetchSessions();
+                const active = allSessions.find(s => s.taskName === selectedTask && s.stopTime === null);
+                if (active) {
+                    setSelectedSession(active);
+                } else {
+                    setSelectedSession({
+                        taskName: selectedTask,
+                        taskId: taskNames.find(t => t.name === selectedTask)?.id,
+                        startTime: (startTime || new Date()).toISOString(),
+                        stopTime: null,
+                        durationSeconds: seconds,
+                        date: getYMD(startTime || new Date())
+                    });
+                }
+                setSessionEditView(true);
+            } catch (e) {
+                setSelectedSession({
+                    taskName: selectedTask,
+                    taskId: taskNames.find(t => t.name === selectedTask)?.id,
+                    startTime: (startTime || new Date()).toISOString(),
+                    stopTime: null,
+                    durationSeconds: seconds,
+                    date: getYMD(startTime || new Date())
+                });
+                setSessionEditView(true);
+            }
+        }
+    };
 
     // edit session function
     const editSession = async () => {
@@ -879,6 +917,8 @@ function Timetracker() {
 
             }
 
+            const chosenTask = editTaskName.trim() || selectedSession.taskName;
+            const chosenTaskId = taskNames.find(t => t.name === chosenTask)?.id || selectedSession.taskId;
 
             const updatedSessions = allSessions.map(s => {
                 const origStart = new Date(s.startTime).getTime();
@@ -890,6 +930,8 @@ function Timetracker() {
                 if (origStart === selStart && origStop === selStop) {
                     return {
                         ...s,
+                        taskName: chosenTask,
+                        taskId: chosenTaskId,
                         startTime: newStart.toISOString(),
                         stopTime: isRunningSession ? null : (newStop ? newStop.toISOString() : s.stopTime),
                         durationSeconds: isRunningSession ? null : durationSeconds,
@@ -904,14 +946,16 @@ function Timetracker() {
             await refreshData();
 
             if (isRunningSession) {
+                setSelectedTask(chosenTask);
                 const elapsed = Math.floor((Date.now() - newStart.getTime()) / 1000)
                 setStartTime(newStart);
                 setSeconds(Math.max(0, elapsed));
 
                 if (intervalRef.current) clearInterval(intervalRef.current);
+                const startMs = newStart.getTime();
                 intervalRef.current = setInterval(() => {
-                    setSeconds(prev => prev + 1)
-                }, 1000)
+                    setSeconds(Math.floor((Date.now() - startMs) / 1000));
+                }, 250)
             }
             setSessionEditView(false);
             showMessage('Session Updated!')
@@ -922,6 +966,7 @@ function Timetracker() {
             setEditStopHour('');
             setEditStopMinute('');
             setEditStopDate('');
+            setEditTaskName('');
 
 
         } catch (err) {
@@ -1036,7 +1081,7 @@ function Timetracker() {
     return (
         <>
             <main className='bg-black min-h-screen text-white font-sans selection:bg-white/10'>
-                <div className='flex flex-col max-w-screen-2xl mx-auto pl-15 p-4 w-screen space-y-4'>
+                <div className='flex flex-col max-w-[1920px] mx-auto pl-15 pr-4 py-4 w-full space-y-4'>
 
                     {/*Header Components*/}
                     <div className='grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 w-full text-sm mb-2'>
@@ -1057,12 +1102,29 @@ function Timetracker() {
                                     </div>
                                 </div>
 
-                                <button
-                                    className={`w-full text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${selectedTask ? 'border-neutral-700 bg-neutral-900 text-neutral-200' : 'border-dashed border-neutral-800 text-neutral-500'} hover:border-neutral-600`}
-                                    onClick={() => setViewTasks(true)}
-                                >
-                                    <span className='truncate block'>{selectedTask || 'Select a task to start tracking'}</span>
-                                </button>
+                                <div className='flex items-center space-x-1.5 w-full'>
+                                    <button
+                                        className={`flex-1 text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${selectedTask ? 'border-neutral-700 bg-neutral-900 text-neutral-200' : 'border-dashed border-neutral-800 text-neutral-500'} hover:border-neutral-600`}
+                                        onClick={() => {
+                                            if (running) {
+                                                handleOpenActiveSessionEdit();
+                                            } else {
+                                                setViewTasks(true);
+                                            }
+                                        }}
+                                    >
+                                        <span className='truncate block'>{selectedTask || 'Select a task to start tracking'}</span>
+                                    </button>
+                                    {running && (
+                                        <button
+                                            onClick={handleOpenActiveSessionEdit}
+                                            title="Change or edit active session"
+                                            className="p-2 rounded-lg border border-neutral-800 bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white transition-all cursor-pointer flex items-center justify-center shrink-0"
+                                        >
+                                            <img src={Edit} className="h-3.5 w-3.5 opacity-70 hover:opacity-100" alt="Edit Session" />
+                                        </button>
+                                    )}
+                                </div>
 
                                 <div className='flex w-full space-x-2'>
                                     <button
@@ -1096,7 +1158,7 @@ function Timetracker() {
                             { label: 'Yesterday', duration: yesterdayDuration, diff: diffToday, border: 'border-neutral-800' },
                             { label: 'This Week', duration: weekDuration, left: weekLeft, done: weekDone, border: 'border-neutral-800' },
                             { label: 'This Month', duration: monthDuration, left: monthLeft, done: monthDone, border: 'border-neutral-800' },
-                            { label: 'This Year', duration: yearDuration, left: yearLeft, done: yearDone, border: 'border-neutral-800', extraClass: 'hidden xl:flex' }
+                            { label: 'This Year', duration: yearDuration, left: yearLeft, done: yearDone, border: 'border-neutral-800', extraClass: 'flex' }
                         ].map((stat, idx) => (
                             <div
                                 key={idx}
@@ -1311,6 +1373,17 @@ function Timetracker() {
                                     <div
                                         key={i}
                                         onClick={() => setDisplayByDay(dateStr)}
+                                        onMouseEnter={(e) => {
+                                            const rect = e.currentTarget.getBoundingClientRect();
+                                            setHeatmapTooltip({
+                                                date: block.date,
+                                                dateStr,
+                                                duration: d,
+                                                x: rect.left + rect.width / 2,
+                                                y: rect.top,
+                                            });
+                                        }}
+                                        onMouseLeave={() => setHeatmapTooltip(null)}
                                         className={`aspect-square rounded-[2px] transition-all duration-300 cursor-pointer ${(() => {
                                             if (d >= 18000) return 'bg-emerald-950';
                                             if (d >= 14400) return 'bg-emerald-900';
@@ -1320,7 +1393,6 @@ function Timetracker() {
                                             if (d > 0) return 'bg-emerald-400/60';
                                             return 'bg-neutral-900 border border-neutral-800/10';
                                         })()} ${isToday ? 'ring-1 ring-emerald-400 ring-offset-1 ring-offset-[#0a0a0a] z-10 scale-125 rounded-[1px]' : ''} hover:scale-150 hover:z-10 hover:shadow-lg`}
-                                        title={`${block.date.toLocaleDateString()}\n${d > 0 ? formatHrsMins(d) : 'No time logged'}`}
                                     />
                                 );
                             })}
@@ -1339,6 +1411,64 @@ function Timetracker() {
 
 
             </main>
+
+            {/* Fancy Professional Annual Activity Tooltip */}
+            {heatmapTooltip && createPortal(
+                <div
+                    className="fixed z-[999] pointer-events-none transition-all duration-150 ease-out"
+                    style={{
+                        left: `${Math.max(100, Math.min(window.innerWidth - 100, heatmapTooltip.x))}px`,
+                        top: `${heatmapTooltip.y - 12}px`,
+                        transform: 'translate(-50%, -100%)',
+                    }}
+                >
+                    <div className="relative bg-[#0c0c0c]/95 backdrop-blur-xl border border-white/10 rounded-xl p-3 shadow-2xl min-w-[180px] max-w-[240px] animate-in fade-in zoom-in-95 duration-150">
+                        {/* Header: Date with clean typography */}
+                        <div className="flex items-center justify-between gap-3 mb-1.5">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">
+                                {heatmapTooltip.date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+                            </span>
+                            {heatmapTooltip.dateStr === getYMD(new Date()) && (
+                                <span className="text-[8px] font-black uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+                                    Today
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Time logged & status pill */}
+                        <div className="flex items-baseline gap-2">
+                            {heatmapTooltip.duration > 0 ? (
+                                <>
+                                    <span className="text-base font-black font-mono tracking-tight text-white">
+                                        {formatHrsMins(heatmapTooltip.duration)}
+                                    </span>
+                                    <span className="text-[9px] font-bold uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                        Logged
+                                    </span>
+                                </>
+                            ) : (
+                                <span className="text-xs font-medium text-neutral-500 italic">
+                                    No time logged
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Intensity / Details Footer */}
+                        {heatmapTooltip.duration > 0 && (
+                            <div className="mt-2 pt-1.5 border-t border-white/5 flex items-center justify-between text-[9px] text-neutral-500">
+                                <span className="uppercase tracking-widest text-[8px] font-bold">Total Time</span>
+                                <span className="font-mono font-bold text-neutral-300">
+                                    {(heatmapTooltip.duration / 3600).toFixed(1)} hrs
+                                </span>
+                            </div>
+                        )}
+
+                        {/* Downward pointer caret */}
+                        <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-1 w-2 h-2 bg-[#0c0c0c] border-r border-b border-white/10 rotate-45" />
+                    </div>
+                </div>,
+                document.body
+            )}
 
             {message &&
                 <div className='fixed w-full inset-0  top-0 p-3  rounded-xl   flex justify-center h-fit  transition-transform ease-in-out duration-300 z-100'>
@@ -1363,7 +1493,30 @@ function Timetracker() {
                         <div className="bg-[#0a0a0a] border border-neutral-800 rounded-2xl p-5 shadow-2xl space-y-5" ref={sessionEditRef} onClick={(e) => e.stopPropagation()} >
                             <div className='flex flex-col space-y-4'>
                                 <div className='space-y-3'>
-                                    <span className='text-[10px] uppercase tracking-widest text-neutral-500 font-bold'>Edit Session</span>
+                                    <div className='flex justify-between items-center'>
+                                        <span className='text-[10px] uppercase tracking-widest text-neutral-500 font-bold'>Edit Session</span>
+                                        {selectedSession && !selectedSession.stopTime && running && (
+                                            <span className='text-[9px] uppercase tracking-wider text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 font-bold'>
+                                                Active / Logging
+                                            </span>
+                                        )}
+                                    </div>
+
+                                    <div className='space-y-1.5'>
+                                        <label className='text-[10px] text-neutral-400 font-medium block uppercase tracking-tight'>Session Logged</label>
+                                        <select
+                                            value={editTaskName}
+                                            onChange={(e) => setEditTaskName(e.target.value)}
+                                            className='bg-neutral-900 border border-neutral-800 rounded px-2 py-1.5 text-xs text-white w-full outline-none focus:border-neutral-600 cursor-pointer'
+                                        >
+                                            {taskNames.map((t, idx) => (
+                                                <option key={t.id || idx} value={t.name}>{t.name}</option>
+                                            ))}
+                                            {editTaskName && !taskNames.some(t => t.name === editTaskName) && (
+                                                <option value={editTaskName}>{editTaskName}</option>
+                                            )}
+                                        </select>
+                                    </div>
 
                                     <div className='space-y-1.5'>
                                         <label className='text-[10px] text-neutral-400 font-medium block uppercase tracking-tight'>Start Time</label>

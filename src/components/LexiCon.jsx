@@ -290,17 +290,17 @@ const LexiconApp = ({ showNavbar = true }) => {
                             <div className="space-y-3">
                                 <input
                                     type="text"
-                                    value={editBasicInput}
-                                    onChange={(e) => setEditBasicInput(e.target.value)}
-                                    className="w-full px-3 py-2 bg-black border border-white/5 rounded-lg focus:outline-none focus:border-zinc-700 text-xs text-white transition-all"
-                                    placeholder="Basic"
-                                />
-                                <input
-                                    type="text"
                                     value={editAdvancedInput}
                                     onChange={(e) => setEditAdvancedInput(e.target.value)}
                                     className="w-full px-3 py-2 bg-black border border-white/5 rounded-lg focus:outline-none focus:border-zinc-700 text-xs text-white transition-all"
                                     placeholder="Advanced"
+                                />
+                                <input
+                                    type="text"
+                                    value={editBasicInput}
+                                    onChange={(e) => setEditBasicInput(e.target.value)}
+                                    className="w-full px-3 py-2 bg-black border border-white/5 rounded-lg focus:outline-none focus:border-zinc-700 text-xs text-white transition-all"
+                                    placeholder="Basic"
                                 />
                             </div>
                             <div className="flex gap-2 mt-5">
@@ -311,7 +311,7 @@ const LexiconApp = ({ showNavbar = true }) => {
                     </div>
                 )}
 
-                <main className="max-w-2xl mx-auto px-4 py-2">
+                <main className="max-w-7xl mx-auto px-4 py-2">
                     {/* Compact Tab Switcher */}
                     <div className="flex justify-center mb-3">
                         <div className="bg-zinc-950 p-0.5 rounded-lg flex w-full max-w-[200px] border border-white/5">
@@ -336,9 +336,9 @@ const LexiconApp = ({ showNavbar = true }) => {
                             <form onSubmit={addWord} className="bg-zinc-950/50 rounded-xl p-3 border border-white/5 flex gap-2">
                                 <input
                                     type="text"
-                                    placeholder="Basic..."
-                                    value={basicInput}
-                                    onChange={(e) => { const v = e.target.value; setBasicInput(v.charAt(0).toUpperCase() + v.slice(1)); }}
+                                    placeholder="Advanced..."
+                                    value={advancedInput}
+                                    onChange={(e) => { const v = e.target.value; setAdvancedInput(v.charAt(0).toUpperCase() + v.slice(1)); }}
                                     className="flex-1 px-3 py-1.5 bg-black border border-white/5 rounded-lg focus:outline-none focus:border-zinc-800 text-xs text-zinc-300 placeholder-zinc-800 transition-all font-mono"
                                 />
                                 <div className="flex items-center">
@@ -346,9 +346,9 @@ const LexiconApp = ({ showNavbar = true }) => {
                                 </div>
                                 <input
                                     type="text"
-                                    placeholder="Advanced..."
-                                    value={advancedInput}
-                                    onChange={(e) => { const v = e.target.value; setAdvancedInput(v.charAt(0).toUpperCase() + v.slice(1)); }}
+                                    placeholder="Basic..."
+                                    value={basicInput}
+                                    onChange={(e) => { const v = e.target.value; setBasicInput(v.charAt(0).toUpperCase() + v.slice(1)); }}
                                     className="flex-1 px-3 py-1.5 bg-black border border-white/5 rounded-lg focus:outline-none focus:border-zinc-800 text-xs text-zinc-300 placeholder-zinc-800 transition-all font-mono"
                                 />
                                 <button type="submit" className="px-4 py-1.5 bg-zinc-900 hover:bg-white hover:text-black text-white text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all border border-white/10 cursor-pointer">Add</button>
@@ -368,7 +368,7 @@ const LexiconApp = ({ showNavbar = true }) => {
                             </div>
 
                             {/* Compact Grid */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-2">
                                 {filteredWords.map((word) => (
                                     <div key={word.id} className="group relative bg-[#050505] rounded-xl p-3 border border-white/5 hover:border-zinc-800 transition-all">
                                         <div className="flex justify-between items-start">

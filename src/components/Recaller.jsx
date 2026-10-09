@@ -38,6 +38,8 @@ function shuffle(arr) {
 function ReadMode({ notes, title, onBack }) {
     const [idx, setIdx] = useState(0);
     const note = notes[idx];
+    const cardInnerRef = useRef(null);
+    const [activeSectionIdx, setActiveSectionIdx] = useState(0);
 
     useEffect(() => {
         const handleKey = (e) => {
@@ -51,6 +53,68 @@ function ReadMode({ notes, title, onBack }) {
         window.addEventListener('keydown', handleKey);
         return () => window.removeEventListener('keydown', handleKey);
     }, [notes.length]);
+
+    // Extract page range sections from the note content
+    const pageRanges = useMemo(() => {
+        if (!note) return [];
+        const matches = [];
+        let index = 0;
+        const regex = /Pages?\s+(\d+(?:\s*[\-–—]\s*\d+)?)\s*:/gi;
+        const text = stripHtml(note.content);
+        let m;
+        while ((m = regex.exec(text)) !== null) {
+            matches.push({ label: m[1].replace(/\s+/g, ''), id: `psec-${index}` });
+            index++;
+        }
+        return matches;
+    }, [note]);
+
+    // Process HTML: wrap "Pages XX-XX:" with styled span + anchor id
+    const processedContent = useMemo(() => {
+        if (!note) return '';
+        let html = note.content;
+        let index = 0;
+        html = html.replace(
+            /(Pages?\s+\d+(?:\s*[\-–—]\s*\d+)?)\s*:/gi,
+            (_, pageText) => {
+                const id = `psec-${index}`;
+                index++;
+                return `<span class="page-section-anchor" id="${id}"></span><span class="page-section-header">${pageText}:<span class="page-header-line"></span></span>`;
+            }
+        );
+        return html;
+    }, [note]);
+
+    // Reset active section when note changes
+    useEffect(() => { setActiveSectionIdx(0); }, [idx]);
+
+    // Track which section is in view
+    useEffect(() => {
+        const container = cardInnerRef.current;
+        if (!container || pageRanges.length === 0) return;
+        const handleScroll = () => {
+            let closest = 0;
+            let closestDist = Infinity;
+            pageRanges.forEach((pr, i) => {
+                const el = document.getElementById(pr.id);
+                if (el) {
+                    const dist = Math.abs(el.getBoundingClientRect().top - container.getBoundingClientRect().top);
+                    if (dist < closestDist) { closestDist = dist; closest = i; }
+                }
+            });
+            setActiveSectionIdx(closest);
+        };
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        return () => container.removeEventListener('scroll', handleScroll);
+    }, [pageRanges]);
+
+    const scrollToSection = (id, i) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setActiveSectionIdx(i);
+        }
+    };
 
     return (
         <div className="mode-container">
@@ -73,10 +137,15 @@ function ReadMode({ notes, title, onBack }) {
                                         : `Page ${note.startPage || note.endPage}`}
                                 </span>
                             )}
-                            <span className="ts">{new Date(note.timestamp).toLocaleDateString()}</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                {note.wordCount != null && (
+                                    <span className="word-count-badge">{note.wordCount} words</span>
+                                )}
+                                <span className="ts">{new Date(note.timestamp).toLocaleDateString()}</span>
+                            </div>
                         </div>
-                        <div className="read-card-inner">
-                             <div className={`note-content ${isArabic(note.content) ? 'rtl' : ''}`} dangerouslySetInnerHTML={{ __html: note.content }} />
+                        <div className="read-card-inner" ref={cardInnerRef}>
+                             <div className={`note-content ${isArabic(note.content) ? 'rtl' : ''}`} dangerouslySetInnerHTML={{ __html: processedContent }} />
                         </div>
                     </div>
                 ) : (
@@ -85,6 +154,22 @@ function ReadMode({ notes, title, onBack }) {
                     </div>
                 )}
             </div>
+
+            {/* Fixed page section sidebar — vertical line with dots */}
+            {pageRanges.length > 0 && (
+                <div className="page-nav-sidebar">
+                    <div className="page-nav-line" />
+                    {pageRanges.map((pr, i) => (
+                        <div
+                            key={pr.id}
+                            className={`page-nav-dot ${i === activeSectionIdx ? 'active' : ''}`}
+                            onClick={() => scrollToSection(pr.id, i)}
+                        >
+                            <span className="dot-tooltip">pp. {pr.label}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {notes.length > 0 && (
                 <div className="nav-row">
@@ -228,6 +313,13 @@ const Recaller = () => {
                 return new Date(a.timestamp) - new Date(b.timestamp);
             });
 
+            // Calculate word count per note (lazy — only on click)
+            notes.forEach(note => {
+                const text = stripHtml(note.content);
+                const words = text.trim().split(/\s+/).filter(w => w.length > 0);
+                note.wordCount = words.length;
+            });
+
             setActiveNotes(notes);
             setSelectedItem(item);
         } catch (e) {
@@ -265,8 +357,8 @@ const Recaller = () => {
                         height: 100vh; background: #050505; color: #fff;
                         display: flex; flex-direction: column; padding: 15px 30px; padding-left: 65px;
                     }
-                    .mode-container { flex: 1; display: flex; flex-direction: column; gap: 10px; max-width: 900px; margin: 0 auto; width: 100%; }
-                    .mode-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+                    .mode-container { flex: 1; display: flex; flex-direction: column; gap: 6px; max-width: 900px; margin: 0 auto; width: 100%; }
+                    .mode-header { display: flex; align-items: center; justify-content: space-between; }
                     .back-btn { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #888; padding: 6px 14px; border-radius: 8px; font-size: 12px; cursor: pointer; transition: all 0.2s; }
                     .back-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
                     .mode-info { display: flex; flex-direction: column; align-items: flex-end; }
@@ -276,12 +368,103 @@ const Recaller = () => {
                     .card-area { flex: 1; display: flex; align-items: stretch; min-height: 0; }
                     .read-card { flex: 1; background: #0c0c0e; border: 1px solid rgba(255,255,255,0.05); border-radius: 20px; display: flex; flex-direction: column; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.3); }
                     .card-topbar { padding: 10px 20px; border-bottom: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.02); display: flex; justify-content: space-between; align-items: center; }
-                    .read-card-inner { flex: 1; overflow-y: auto; padding: 20px; }
+                    .read-card-inner { flex: 1; overflow-y: auto; padding: 10px 20px 20px 20px; }
                     .note-content { font-size: 16px; line-height: 1.6; color: #ccc; text-align: justify; }
                     .note-content.rtl { direction: rtl; text-align: justify; }
                     .note-content h1, .note-content h2 { color: #fff; margin-bottom: 15px; }
                     .page-badge { background: rgba(79,142,247,0.1); color: #4f8ef7; padding: 4px 10px; border-radius: 6px; font-size: 11px; font-weight: 700; }
                     .ts { font-size: 11px; color: #444; }
+                    .word-count-badge { font-size: 10px; color: #666; font-weight: 600; letter-spacing: 0.02em; }
+
+                    /* Page section headers inside note content */
+                    .page-section-anchor { display: block; height: 0; }
+                    .page-section-header {
+                        display: inline-flex;
+                        align-items: center;
+                        color: #6ba3f7;
+                        font-weight: 800;
+                        font-size: 14px;
+                        letter-spacing: 0.02em;
+                        margin-bottom: 4px;
+                        gap: 0;
+                    }
+                    .page-header-line {
+                        display: inline-block;
+                        width: 500px;
+                        height: 3px;
+                        background: rgba(30, 64, 130, 0.6);
+                        margin-left: 10px;
+                        vertical-align: middle;
+                        flex-shrink: 0;
+                    }
+
+                    /* Fixed page nav sidebar — vertical line with dots */
+                    .page-nav-sidebar {
+                        position: fixed;
+                        right: 18px;
+                        top: 50%;
+                        transform: translateY(-50%);
+                        z-index: 100;
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        gap: 0;
+                        pointer-events: none;
+                    }
+                    .page-nav-line {
+                        position: absolute;
+                        top: 0;
+                        bottom: 0;
+                        width: 3px;
+                        background: rgba(79, 142, 247, 0.2);
+                        border-radius: 1px;
+                        pointer-events: none;
+                    }
+                    .page-nav-dot {
+                        width: 18px;
+                        height: 18px;
+                        border-radius: 50%;
+                        background: rgba(255,255,255,0.08);
+                        border: 3px solid rgba(79, 142, 247, 0.3);
+                        cursor: pointer;
+                        pointer-events: auto;
+                        transition: all 0.2s;
+                        margin: 6px 0;
+                        position: relative;
+                        z-index: 1;
+                    }
+                    .page-nav-dot:hover {
+                        background: rgba(79, 142, 247, 0.25);
+                        border-color: rgba(79, 142, 247, 0.5);
+                        transform: scale(1.3);
+                    }
+                    .page-nav-dot.active {
+                        background: #4f8ef7;
+                        border-color: #4f8ef7;
+                        box-shadow: 0 0 8px rgba(79, 142, 247, 0.5);
+                        transform: scale(1.3);
+                    }
+                    .dot-tooltip {
+                        position: absolute;
+                        right: calc(100% + 10px);
+                        top: 50%;
+                        transform: translateY(-50%);
+                        background: #111;
+                        color: #ccc;
+                        font-size: 10px;
+                        font-weight: 700;
+                        padding: 4px 8px;
+                        border-radius: 6px;
+                        white-space: nowrap;
+                        pointer-events: none;
+                        opacity: 0;
+                        transition: opacity 0.15s;
+                        border: 1px solid rgba(255,255,255,0.08);
+                        letter-spacing: 0.03em;
+                    }
+                    .page-nav-dot:hover .dot-tooltip {
+                        opacity: 1;
+                    }
 
                     .nav-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
                     .nav-btn { background: #111; border: 1px solid #222; color: #fff; padding: 10px 24px; border-radius: 12px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s; }

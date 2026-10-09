@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { Play, Pause, SkipBack, SkipForward, Music, List, Search, Heart, Share2, Repeat, Shuffle, ArrowDownUp, Copy, Move, Trash2, FolderPlus, Check, X, AlertTriangle, Target } from 'lucide-react';
 import Navbar from './Navbar';
 import { useMusic } from '../contexts/MusicContext';
@@ -29,13 +29,15 @@ const MusicPlayer = () => {
         prevSong,
         toggleShuffle,
         toggleRepeat,
-        seek
+        seek,
+        isLibraryLoaded
     } = useMusic();
 
     const [viewingPlaylist, setViewingPlaylist] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [isLibraryOpen, setIsLibraryOpen] = useState(false);
     const [deferredLoad, setDeferredLoad] = useState(false);
+    const hasInitializedPlaylistView = useRef(false);
 
     // Keep viewingPlaylist in sync with context playlists (for optimistic updates)
     useEffect(() => {
@@ -49,6 +51,22 @@ const MusicPlayer = () => {
             }
         }
     }, [playlists]);
+
+    // Initialize view to the currently playing song's playlist when opened/refreshed
+    useEffect(() => {
+        if (!hasInitializedPlaylistView.current && isLibraryLoaded) {
+            if (currentSong && playlists.length > 0 && playingSongs.length > 0) {
+                const activePlaylist = playlists.find(pl => 
+                    pl.songs.length === playingSongs.length &&
+                    pl.songs.some(s => s.path === currentSong.path)
+                );
+                if (activePlaylist) {
+                    setViewingPlaylist(activePlaylist);
+                }
+            }
+            hasInitializedPlaylistView.current = true;
+        }
+    }, [isLibraryLoaded, currentSong, playlists, playingSongs]);
 
     // Context Menu & Selector State
     const [contextMenu, setContextMenu] = useState(null);

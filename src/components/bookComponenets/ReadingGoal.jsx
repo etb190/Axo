@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 const fs = window.require('fs').promises;
 const path = window.require('path');
+import { useData } from '../../contexts/DataContext';
 
 import TargetIcon from '../../assets/icons/goals.svg';
 import CalendarIcon from '../../assets/icons/calendar.svg';
@@ -11,8 +12,10 @@ import CheckIcon from '../../assets/icons/check.svg';
 import EditIcon from '../../assets/icons/edit.svg';
 
 const GOAL_FILE = 'C:\\Users\\PC\\Desktop\\database\\Books\\reading_goal.json';
+const LOGS_FILE = 'C:\\Users\\PC\\Desktop\\database\\Books\\reading_logs.json';
 
 const ReadingGoal = () => {
+    const { data, refreshData } = useData();
     const [goal, setGoal] = useState(null);
     const [isEditing, setIsEditing] = useState(false);
     const [isUpdatingProgress, setIsUpdatingProgress] = useState(false);
@@ -20,8 +23,7 @@ const ReadingGoal = () => {
 
     const [formData, setFormData] = useState({
         totalPages: '',
-        deadline: '',
-        currentPages: 0
+        deadline: ''
     });
 
     useEffect(() => {
@@ -43,6 +45,7 @@ const ReadingGoal = () => {
             setGoal(goalData);
             setIsEditing(false);
             setIsUpdatingProgress(false);
+            if (refreshData) refreshData();
         } catch (e) {
             console.error('Failed to save goal', e);
         }
@@ -59,16 +62,32 @@ const ReadingGoal = () => {
         saveGoal(newGoal);
     };
 
-    const handleUpdateProgress = () => {
+    const handleUpdateProgress = async () => {
         const addedPages = parseInt(newProgress);
         if (isNaN(addedPages)) return;
 
-        const updatedGoal = {
-            ...goal,
-            currentPages: (goal.currentPages || 0) + addedPages
-        };
-        saveGoal(updatedGoal);
-        setNewProgress('');
+        try {
+            let logs = [];
+            try {
+                const logsData = await fs.readFile(LOGS_FILE, 'utf8');
+                logs = JSON.parse(logsData);
+            } catch (e) {}
+
+            logs.push({
+                id: crypto.randomUUID(),
+                bookName: 'Manual Log',
+                bookPath: 'manual',
+                pages: addedPages,
+                date: new Date().toISOString()
+            });
+
+            await fs.writeFile(LOGS_FILE, JSON.stringify(logs, null, 2));
+            setIsUpdatingProgress(false);
+            setNewProgress('');
+            if (refreshData) refreshData();
+        } catch (e) {
+            console.error('Error logging manual pages:', e);
+        }
     };
 
     const stats = useMemo(() => {
@@ -78,27 +97,41 @@ const ReadingGoal = () => {
         today.setHours(0, 0, 0, 0);
         const deadline = new Date(goal.deadline);
         deadline.setHours(23, 59, 59, 999);
+        
+        const goalStartDate = new Date(goal.createdAt || today);
+        goalStartDate.setHours(0, 0, 0, 0);
+
+        // Calculate dynamic currentPages from reading logs
+        let calculatedPages = 0;
+        const logs = data.reading?.readingLogs || [];
+        logs.forEach(log => {
+            const logDate = new Date(log.date);
+            if (logDate >= goalStartDate) {
+                calculatedPages += log.pages;
+            }
+        });
+        
+        if (calculatedPages < 0) calculatedPages = 0;
 
         const diffMs = deadline - today;
         const daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
-        const pagesLeft = Math.max(0, goal.totalPages - goal.currentPages);
+        const pagesLeft = Math.max(0, goal.totalPages - calculatedPages);
 
-        const startDate = new Date(goal.createdAt || today);
-        startDate.setHours(0, 0, 0, 0);
-        const totalDurationMs = deadline - startDate;
+        const totalDurationMs = deadline - goalStartDate;
         const totalDays = Math.max(1, Math.ceil(totalDurationMs / (1000 * 60 * 60 * 24)));
         const pagesPerDay = Math.ceil(goal.totalPages / totalDays);
 
-        const progressPercent = Math.min(100, Math.round((goal.currentPages / goal.totalPages) * 100));
+        const progressPercent = Math.min(100, Math.round((calculatedPages / goal.totalPages) * 100));
 
         return {
             daysLeft,
             pagesLeft,
             pagesPerDay,
             progressPercent,
+            currentPages: calculatedPages,
             isOverdue: diffMs < 0 && pagesLeft > 0
         };
-    }, [goal]);
+    }, [goal, data.reading?.readingLogs]);
 
     if (!goal && !isEditing) {
         return (
@@ -216,7 +249,7 @@ const ReadingGoal = () => {
                         )}
                         <button
                             onClick={() => {
-                                setFormData({ totalPages: goal.totalPages, deadline: goal.deadline, currentPages: goal.currentPages });
+                                setFormData({ totalPages: goal.totalPages, deadline: goal.deadline });
                                 setIsEditing(true);
                             }}
                             className="px-3 py-1 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-bold text-white transition-all border border-white/5 uppercase tracking-widest cursor-pointer"
@@ -232,7 +265,7 @@ const ReadingGoal = () => {
                         <div className="flex gap-4">
                             <div className="flex flex-col">
                                 <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Progress</span>
-                                <span className="text-xs font-black text-white">{goal.currentPages} <span className="text-[10px] text-zinc-600 font-normal">/ {goal.totalPages} Pgs</span> <span className="text-[10px] text-blue-400 font-bold ml-1">({stats.progressPercent}%)</span></span>
+                                <span className="text-xs font-black text-white">{stats.currentPages} <span className="text-[10px] text-zinc-600 font-normal">/ {goal.totalPages} Pgs</span> <span className="text-[10px] text-blue-400 font-bold ml-1">({stats.progressPercent}%)</span></span>
                             </div>
                             <div className="flex flex-col border-l border-white/5 pl-4">
                                 <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest">Remaining</span>

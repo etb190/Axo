@@ -10,6 +10,8 @@ const fs = window.require('fs');
 const { shell } = window.require('electron');
 
 import ReadingGoal from './bookComponenets/ReadingGoal';
+import UnifiedActivityTracker from './bookComponenets/UnifiedActivityTracker';
+import BookStats from './bookComponenets/BookStats';
 
 import PlusIcon from '../assets/icons/plus.svg';
 import TrashIcon from '../assets/icons/delete.svg';
@@ -22,6 +24,8 @@ const Books = ({ onBookClick, onFastReaderClick }) => {
   const [selectedBookForNotes, setSelectedBookForNotes] = useState(null);
   const [showCatManager, setShowCatManager] = useState(false);
   const [newCatName, setNewCatName] = useState('');
+  const [editingCat, setEditingCat] = useState(null);
+  const [editCatValue, setEditCatValue] = useState('');
 
   const categories = data.reading?.categories || [];
 
@@ -56,30 +60,47 @@ const Books = ({ onBookClick, onFastReaderClick }) => {
   };
 
   const deleteCategory = (catName) => {
-    // Only delete if empty in ALL shelves
-    let canDelete = true;
     SHELF_KEYS.forEach((key) => {
       const catPath = path.join(BASE_BOOKS, key, catName);
       if (fs.existsSync(catPath)) {
         try {
-          const files = fs.readdirSync(catPath).filter(f => f.toLowerCase().endsWith('.pdf'));
-          if (files.length > 0) canDelete = false;
+          const files = fs.readdirSync(catPath);
+          files.forEach(file => {
+            const oldPath = path.join(catPath, file);
+            const newPath = path.join(BASE_BOOKS, key, file);
+            fs.renameSync(oldPath, newPath);
+          });
+          fs.rmdirSync(catPath);
         } catch (e) { }
       }
     });
 
-    if (!canDelete) {
-      alert(`Cannot delete "${catName}" — it still contains books. Move them first.`);
+    refreshData();
+  };
+
+  const editCategory = (oldName, newName) => {
+    if (!newName || newName === oldName) {
+      setEditingCat(null);
       return;
     }
-
     SHELF_KEYS.forEach((key) => {
-      const catPath = path.join(BASE_BOOKS, key, catName);
-      if (fs.existsSync(catPath)) {
-        try { fs.rmdirSync(catPath); } catch (e) { }
+      const oldCatPath = path.join(BASE_BOOKS, key, oldName);
+      const newCatPath = path.join(BASE_BOOKS, key, newName);
+      if (fs.existsSync(oldCatPath)) {
+        if (!fs.existsSync(newCatPath)) fs.mkdirSync(newCatPath, { recursive: true });
+        try {
+          const files = fs.readdirSync(oldCatPath);
+          files.forEach(file => {
+            const oldPath = path.join(oldCatPath, file);
+            const newPath = path.join(newCatPath, file);
+            fs.renameSync(oldPath, newPath);
+          });
+          fs.rmdirSync(oldCatPath);
+        } catch (e) { }
       }
     });
 
+    setEditingCat(null);
     refreshData();
   };
 
@@ -89,6 +110,13 @@ const Books = ({ onBookClick, onFastReaderClick }) => {
 
         {/* Categories / Shelves */}
         <div className="space-y-4">
+          <BookStats />
+          <UnifiedActivityTracker 
+              logs={data.reading?.readingLogs || []}
+              books={data.reading?.shelves?.Read || []} 
+              articles={data.articles?.shelves?.Read || []} 
+          />
+
           {shelves.map((shelf, index) => (
             <React.Fragment key={shelf.title}>
               <section>
@@ -104,9 +132,9 @@ const Books = ({ onBookClick, onFastReaderClick }) => {
                 />
               </section>
 
-              {/* Insert Reading Goal between Currently Reading (index 0) and Want to Read (index 1) */}
+              {/* Insert ReadingGoal after Currently Reading */}
               {index === 0 && (
-                <div className="py-0">
+                <div className="py-0 flex flex-col gap-4">
                   <ReadingGoal />
                 </div>
               )}
@@ -160,19 +188,61 @@ const Books = ({ onBookClick, onFastReaderClick }) => {
                   </button>
                 </div>
 
-                <div className="space-y-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
+                <div className="space-y-1 max-h-[300px] overflow-y-auto overflow-x-hidden pr-2 custom-scrollbar w-full">
                   {categories.length === 0 ? (
                     <p className="text-[10px] text-gray-500 text-center py-8">No custom categories yet</p>
                   ) : (
                     categories.map((cat) => (
-                      <div key={cat} className="group flex items-center justify-between p-2 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all">
-                        <span className="text-xs text-gray-400 group-hover:text-white transition-colors">{cat}</span>
-                        <button
-                          onClick={() => deleteCategory(cat)}
-                          className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 text-red-400 transition-all cursor-pointer"
-                        >
-                          <img src={TrashIcon} className="w-3.5 h-3.5" alt="delete" />
-                        </button>
+                      <div key={cat} className="group w-full flex items-center justify-between p-2 rounded-xl hover:bg-white/5 border border-transparent hover:border-white/5 transition-all">
+                        {editingCat === cat ? (
+                          <div className="flex items-center gap-1.5 w-full">
+                            <input
+                              type="text"
+                              value={editCatValue}
+                              onChange={(e) => setEditCatValue(e.target.value)}
+                              className="flex-1 w-full min-w-0 bg-white/5 text-white text-xs font-medium rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500/50 border border-white/5"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') editCategory(cat, editCatValue.trim());
+                                if (e.key === 'Escape') setEditingCat(null);
+                              }}
+                            />
+                            <button
+                              onClick={() => editCategory(cat, editCatValue.trim())}
+                              className="p-1.5 rounded-md bg-blue-600 hover:bg-blue-500 text-white transition-all flex-shrink-0"
+                              title="Save"
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                            </button>
+                            <button
+                              onClick={() => setEditingCat(null)}
+                              className="p-1.5 rounded-md bg-white/10 hover:bg-white/20 text-white transition-all flex-shrink-0"
+                              title="Cancel"
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs text-gray-400 group-hover:text-white transition-colors">{cat}</span>
+                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                              <button
+                                onClick={() => { setEditingCat(cat); setEditCatValue(cat); }}
+                                className="p-1.5 rounded-lg hover:bg-blue-500/10 text-gray-400 hover:text-blue-400 transition-all cursor-pointer"
+                                title="Edit"
+                              >
+                                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+                              </button>
+                              <button
+                                onClick={() => deleteCategory(cat)}
+                                className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400 transition-all cursor-pointer"
+                                title="Delete"
+                              >
+                                <img src={TrashIcon} className="w-3.5 h-3.5" alt="delete" />
+                              </button>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))
                   )}

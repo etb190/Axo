@@ -20,11 +20,7 @@ import FinanceTracker from './components/FinanceTracker';
 import GrowthParent from './components/GrowthParent';
 import Accounts from './components/Accounts';
 import MediaParent from './components/MediaParent';
-import LanguageLearning from './components/LanguageLearning';
-import LanguageParent from './components/LanguageParent';
-import LanguageTutor from './components/LanguageTutor';
 import Notes from './components/Notes';
-import SkillsTrainingHub from "./components/SkillsTrainingHub";
 
 import { MusicProvider } from './contexts/MusicContext';
 import MiniMusicPlayer from './components/MiniMusicPlayer';
@@ -60,23 +56,18 @@ const AppContent = () => {
                 <Route path='/Roleplay' element={<LMStudioConnector />} />
                 <Route path='/Timeallocator' element={<TimeAllocator />} />
                 <Route path='/Skills' element={<SkillPathPlanner />} />
-                <Route path='/LexiCon' element={<LanguageParent view="lexicon" />} />
+                <Route path='/LexiCon' element={<LexiconApp />} />
                 <Route path='/DailyJournal' element={<DailyJournal />} />
                 <Route path='/Music' element={<MusicPlayer />} />
                 <Route path='/Finances' element={<FinanceTracker />} />
                 <Route path='/Growth' element={<GrowthParent />} />
                 <Route path='/Growth/:view' element={<GrowthParent />} />
-                <Route path='/Language' element={<LanguageParent />} />
-                <Route path='/Language/:view' element={<LanguageParent />} />
-                <Route path='/Language/:view/:language' element={<LanguageParent />} />
-                <Route path='/Language/tutor/:language' element={<LanguageTutor />} />
-                <Route path='/LanguageLearning' element={<LanguageParent view="learning" />} />
-                <Route path='/LanguageLearning/:language' element={<LanguageParent view="learning" />} />
+                <Route path='/Language' element={<LexiconApp />} />
+                <Route path='/Language/*' element={<LexiconApp />} />
                 <Route path='/Accounts' element={<Accounts />} />
                 <Route path='/Media' element={<MediaParent />} />
                 <Route path='/Media/:view' element={<MediaParent />} />
                 <Route path='/Notes' element={<Notes />} />
-                <Route path='/Training/*' element={<SkillsTrainingHub />} />
             </Routes>
         </HashRouter>
     );

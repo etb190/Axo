@@ -11,11 +11,9 @@ import booktype from '../assets/icons/booktype.svg'
 import Goals from '../assets/icons/goals.svg'
 import Journal from '../assets/icons/journal.svg'
 import Books from '../assets/icons/book.svg'
-import Concepts from '../assets/icons/concepts.svg'
 import Plans from '../assets/icons/Plans.svg'
 import MusicIcon from '../assets/icons/music.svg'
 import PlayIcon from '../assets/icons/play.svg'
-import BrainIcon from '../assets/icons/brain.svg'
 import EyeIcon from '../assets/icons/eye.svg';
 import chartIcon from '../assets/icons/chart.svg'
 import editIcon from '../assets/icons/edit.svg';
@@ -33,8 +31,7 @@ const Navbar = () => {
         { icon: Finances, name: 'Finances', path: '/Finances' },
         { icon: MusicIcon, name: 'Music', path: '/Music' },
         { icon: Plans, name: 'Growth', path: '/Growth' },
-        { icon: BrainIcon, name: 'Training', path: '/Training' },
-        { icon: Concepts, name: 'Languages', path: '/Language' },
+        { icon: booktype, name: 'Lexicon', path: '/LexiCon' },
         { icon: Accounts, name: 'Accounts', path: '/Accounts' },
         { icon: PlayIcon, name: 'Media', path: '/Media' },
         { icon: Journal, name: 'Journal', path: '/DailyJournal' },
@@ -59,16 +56,9 @@ const Navbar = () => {
                 target = '/Growth/goals';
                 localStorage.setItem('axo_growth_last_view', 'goals');
             }
-            else if (itemPath === '/Language') {
-                target = '/Language/learning';
-                localStorage.setItem('axo_language_last_view', 'learning');
-            }
             else if (itemPath === '/Media') {
                 target = '/Media/tv';
                 localStorage.setItem('axo_media_last_view', 'tv');
-            }
-            else if (itemPath === '/Training') {
-                target = '/Training'; // Hub is index
             }
             
             navigate(`${target}?t=${Date.now()}`);

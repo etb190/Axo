@@ -53,6 +53,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
   const [newCatInput, setNewCatInput] = useState('');
   const [showNewCatInput, setShowNewCatInput] = useState(false);
   const [showCatDropdown, setShowCatDropdown] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [editCategoryValue, setEditCategoryValue] = useState('');
   const catDropdownRef = useRef(null);
 
   const storageKey = `axo_bookshelf_cat_${shelfKey || title}`;
@@ -151,15 +153,18 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
       const thumbnailPath = path.join(THUMBNAIL_CACHE_FOLDER, book.name + '.jpg');
       const hasThumbnail = fs.existsSync(thumbnailPath);
 
+      const createdIso = book.createdAt ? (book.createdAt instanceof Date ? book.createdAt.toISOString() : book.createdAt) : new Date().toISOString();
       const cacheData = {
         name: book.name,
         totalPages: totalPages || book.progress?.total || 0,
         thumbnailPath: hasThumbnail ? thumbnailPath : null,
         originalPath: book.fullPath,
         shelf: shelfKeyForCache,
+        category: book.category || null,
+        addedToShelfAt: createdIso,
         cachedAt: new Date().toISOString(),
-        createdAt: book.createdAt ? book.createdAt.toISOString() : new Date().toISOString(),
-        lastUpdated: book.lastUpdated ? book.lastUpdated.toISOString() : new Date().toISOString(),
+        createdAt: createdIso,
+        lastUpdated: book.lastUpdated ? (book.lastUpdated instanceof Date ? book.lastUpdated.toISOString() : book.lastUpdated) : new Date().toISOString(),
       };
 
       fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
@@ -311,10 +316,31 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
     }
 
     const clamped = storedTotal > 0 ? Math.max(0, Math.min(currentPage, storedTotal)) : Math.max(0, currentPage);
+    const previousCurrent = progressData[book.fullPath]?.current || 0;
+    const pagesRead = clamped - previousCurrent;
 
     try {
       fs.writeFileSync(progressFile, JSON.stringify({ current: clamped, total: storedTotal }, null, 2));
       syncProgressToSkills(book.name, clamped);
+
+      // Auto-log pages if user changed their progress (including moving backwards)
+      if (pagesRead !== 0) {
+        const BASE_DB = 'C:\\Users\\PC\\Desktop\\database';
+        const LOGS_FILE = path.join(BASE_DB, 'Books', 'reading_logs.json');
+        let logs = [];
+        if (fs.existsSync(LOGS_FILE)) {
+          logs = JSON.parse(fs.readFileSync(LOGS_FILE, 'utf8'));
+        }
+        logs.push({
+          id: crypto.randomUUID(),
+          bookName: book.name,
+          bookPath: book.fullPath,
+          pages: pagesRead,
+          date: new Date().toISOString()
+        });
+        fs.writeFileSync(LOGS_FILE, JSON.stringify(logs, null, 2));
+      }
+
       refreshData();
     } catch (e) {
       console.error("Save progress error", e);
@@ -523,7 +549,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
 
   const moveBook = (book, targetKey, targetCategory) => {
     try {
-      const cat = targetCategory === '__root__' ? null : targetCategory;
+      const cat = targetCategory === undefined ? (book.category || null) : (targetCategory === '__root__' ? null : targetCategory);
+      const nowIso = new Date().toISOString();
 
       if (book.cachedOnly) {
         const cacheFilePath = path.join(BOOK_CACHE_FOLDER, book.name + '.json');
@@ -531,6 +558,8 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
           const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
           cacheData.shelf = targetKey;
           cacheData.category = cat;
+          cacheData.addedToShelfAt = nowIso;
+          cacheData.createdAt = nowIso;
           fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
         }
         refreshData();
@@ -555,13 +584,18 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
       fs.renameSync(book.fullPath, targetPath);
 
       const cacheFilePath = path.join(BOOK_CACHE_FOLDER, book.name + '.json');
+      let cacheData = {};
       if (fs.existsSync(cacheFilePath)) {
-        const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
-        cacheData.shelf = targetKey;
-        cacheData.originalPath = targetPath;
-        cacheData.category = cat;
-        fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+        try { cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8')); } catch (e) {}
       }
+      cacheData.name = book.name;
+      cacheData.shelf = targetKey;
+      cacheData.originalPath = targetPath;
+      cacheData.category = cat;
+      cacheData.addedToShelfAt = nowIso;
+      cacheData.createdAt = nowIso;
+      cacheData.lastUpdated = nowIso;
+      fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
 
       refreshData();
       setMoveModal(null);
@@ -665,13 +699,100 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
       refreshData();
       setRenameModal(null);
     } catch (err) {
-      console.error('Error renaming book:', err);
+      setRenameError('Error renaming book.');
+      console.error(err);
+    }
+  };
+
+  const deleteCategoryGlobally = (catName) => {
+    try {
+      const BASE_BOOKS = 'C:\\Users\\PC\\Desktop\\database\\Books';
+      const shelfKeysList = ['Reading', 'WanttoRead', 'Read'];
+      shelfKeysList.forEach((key) => {
+        const catPath = path.join(BASE_BOOKS, key, catName);
+        if (fs.existsSync(catPath)) {
+          const files = fs.readdirSync(catPath);
+          files.forEach(file => {
+            const oldPath = path.join(catPath, file);
+            const newPath = path.join(BASE_BOOKS, key, file);
+            fs.renameSync(oldPath, newPath);
+            if (file.toLowerCase().endsWith('.pdf')) {
+              const bookName = path.basename(file, '.pdf');
+              const cacheFilePath = path.join(BOOK_CACHE_FOLDER, bookName + '.json');
+              if (fs.existsSync(cacheFilePath)) {
+                try {
+                  const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+                  cacheData.originalPath = newPath;
+                  cacheData.category = null;
+                  fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+                } catch(e){}
+              }
+            }
+          });
+          fs.rmdirSync(catPath);
+        }
+      });
+      refreshData();
+    } catch (err) {
+      console.error('Error deleting category:', err);
+    }
+  };
+
+  const editCategoryGlobally = (oldCatName, newCatName) => {
+    if (!newCatName || newCatName === oldCatName) {
+      setEditingCategory(null);
+      return;
+    }
+    try {
+      const BASE_BOOKS = 'C:\\Users\\PC\\Desktop\\database\\Books';
+      const shelfKeysList = ['Reading', 'WanttoRead', 'Read'];
+      shelfKeysList.forEach((key) => {
+        const oldCatPath = path.join(BASE_BOOKS, key, oldCatName);
+        const newCatPath = path.join(BASE_BOOKS, key, newCatName);
+        if (fs.existsSync(oldCatPath)) {
+          if (!fs.existsSync(newCatPath)) fs.mkdirSync(newCatPath, { recursive: true });
+          const files = fs.readdirSync(oldCatPath);
+          files.forEach(file => {
+            const oldPath = path.join(oldCatPath, file);
+            const newPath = path.join(newCatPath, file);
+            fs.renameSync(oldPath, newPath);
+            if (file.toLowerCase().endsWith('.pdf')) {
+              const bookName = path.basename(file, '.pdf');
+              const cacheFilePath = path.join(BOOK_CACHE_FOLDER, bookName + '.json');
+              if (fs.existsSync(cacheFilePath)) {
+                try {
+                  const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+                  cacheData.originalPath = newPath;
+                  cacheData.category = newCatName;
+                  fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+                } catch(e){}
+              }
+            }
+          });
+          fs.rmdirSync(oldCatPath);
+        }
+      });
+      refreshData();
+      setEditingCategory(null);
+    } catch (err) {
+      console.error('Error editing category:', err);
     }
   };
 
   const changeCategoryForBook = (book, newCategory) => {
     try {
       const cat = newCategory === '__root__' ? null : newCategory;
+      if (book.cachedOnly) {
+        const cacheFilePath = path.join(BOOK_CACHE_FOLDER, book.name + '.json');
+        if (fs.existsSync(cacheFilePath)) {
+          const cacheData = JSON.parse(fs.readFileSync(cacheFilePath, 'utf8'));
+          cacheData.category = cat;
+          fs.writeFileSync(cacheFilePath, JSON.stringify(cacheData, null, 2));
+        }
+        refreshData();
+        setCategoryModal(null);
+        return;
+      }
       const fileName = path.basename(book.fullPath);
       const BASE_BOOKS = 'C:\\Users\\PC\\Desktop\\database\\Books';
       // Determine which shelf this book is in
@@ -870,7 +991,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                             className="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 border border-white/10 flex items-center justify-center transition-all group/btn cursor-pointer"
                             title="Show in Explorer"
                           >
-                            <svg className="w-[18px] h-[18px] text-white transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <svg className="w-3.5 h-3.5 text-white transition-transform group-hover/btn:scale-110" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
                               <circle cx="15" cy="15" r="3" /><path d="m21 21-1.5-1.5" />
                             </svg>
@@ -1084,14 +1205,16 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
               <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Shelf</label>
               <div className="grid gap-2">
                 {shelfKeys.map((shelf) => {
-                  const isActive = moveModal.fullPath.includes(`\\${shelf.key}\\`) || moveModal.fullPath.includes(`/${shelf.key}/`);
+                  const isActive = moveModal.fullPath
+                    ? (moveModal.fullPath.includes(`\\${shelf.key}\\`) || moveModal.fullPath.includes(`/${shelf.key}/`))
+                    : (moveModal.shelf === shelf.key);
 
                   return (
                     <button
                       key={shelf.key}
-                      disabled={isActive && moveTargetCategory === (moveModal.category || '__root__')}
-                      onClick={() => moveBook(moveModal, shelf.key, moveTargetCategory)}
-                      className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${isActive && moveTargetCategory === (moveModal.category || '__root__')
+                      disabled={isActive}
+                      onClick={() => moveBook(moveModal, shelf.key, moveModal.category || '__root__')}
+                      className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${isActive
                         ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
                         : 'bg-white/[0.02] border-white/5 hover:border-blue-500/40 hover:bg-blue-500/5 cursor-pointer active:scale-[0.98]'
                         }`}
@@ -1102,7 +1225,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                           {shelf.title}
                         </span>
                       </div>
-                      {isActive && moveTargetCategory === (moveModal.category || '__root__') ? (
+                      {isActive ? (
                         <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter">Current</span>
                       ) : (
                         <img src={CheckIcon} className="w-4 h-4 opacity-0 group-hover:opacity-40 transition-opacity invert" />
@@ -1112,35 +1235,6 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 })}
               </div>
 
-              {/* Category selection for move */}
-              {categories.length > 0 && (
-                <div className="space-y-2 mt-4">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
-                  <div className="flex flex-wrap gap-1.5 p-1">
-                    <button
-                      onClick={() => setMoveTargetCategory('__root__')}
-                      className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCategory === '__root__'
-                        ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
-                        : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
-                        }`}
-                    >
-                      None
-                    </button>
-                    {categories.map(cat => (
-                      <button
-                        key={cat}
-                        onClick={() => setMoveTargetCategory(cat)}
-                        className={`px-3 py-1.5 rounded-lg border text-[10px] font-bold uppercase transition-all cursor-pointer ${moveTargetCategory === cat
-                          ? 'bg-violet-500/20 border-violet-500/40 text-violet-300'
-                          : 'bg-white/[0.03] border-white/5 text-gray-500 hover:text-gray-300'
-                          }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="mt-8">
@@ -1187,7 +1281,7 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
                 onClick={() => confirmDelete(deleteModal)}
                 className="px-6 py-3.5 bg-red-600 hover:bg-red-500 rounded-2xl text-sm font-bold text-white cursor-pointer transition-all shadow-lg shadow-red-600/20 active:scale-95"
               >
-                {shelfKey === 'Read' && !deleteModal.cachedOnly ? 'Cache Book' : 'Delete Permanently'}
+                {shelfKey === 'Read' && !deleteModal.cachedOnly ? 'Cache Book' : 'Delete'}
               </button>
             </div>
           </div>
@@ -1202,103 +1296,160 @@ const BookShelf = ({ title, shelfKey, books = [], onNotesClick, onBookClick, onF
           onMouseDown={(e) => { if (e.target === e.currentTarget) { setCategoryModal(null) } }}
         >
           <div
-            className="bg-[#0f0f0f] rounded-[1.5rem] p-5 max-w-[300px] w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300 flex flex-col max-h-[85vh]"
+            className="bg-[#0f0f0f] rounded-[2rem] p-8 max-w-sm w-full border border-white/10 shadow-3xl transform animate-in zoom-in-95 duration-300"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-col items-center text-center mb-3">
-              <h3 className="text-base font-bold text-white mb-0.5">Change Category</h3>
-              <p className="text-[10px] text-gray-500 max-w-[200px] line-clamp-1">{categoryModal.name}</p>
+            <div className="flex flex-col items-center text-center mb-4">
+              <h3 className="text-xl font-bold text-white">Change Category</h3>
             </div>
 
-            <div className="grid gap-1.5 overflow-y-auto pr-1 max-h-[320px] custom-scrollbar">
-              <button
-                onClick={() => changeCategoryForBook(categoryModal, '__root__')}
-                className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${!categoryModal.category
-                  ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
-                  : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
-                  }`}
-                disabled={!categoryModal.category}
-              >
-                <div className="flex items-center gap-3">
-                  <div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-violet-400'}`} />
-                  <span className={`text-sm font-semibold ${!categoryModal.category ? 'text-gray-500' : 'text-white'}`}>Uncategorized</span>
-                </div>
-                {!categoryModal.category && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
-              </button>
-              {categories.map(cat => (
+            <div className="space-y-3">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest pl-2">Select Category</label>
+              <div className="grid gap-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
                 <button
-                  key={cat}
-                  onClick={() => changeCategoryForBook(categoryModal, cat)}
-                  className={`group flex items-center justify-between p-2.5 rounded-lg border transition-all ${categoryModal.category === cat
+                  onClick={() => changeCategoryForBook(categoryModal, '__root__')}
+                  disabled={!categoryModal.category}
+                  className={`group flex items-center justify-between p-4 rounded-2xl border transition-all ${!categoryModal.category
                     ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
                     : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
                     }`}
-                  disabled={categoryModal.category === cat}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${categoryModal.category === cat ? 'bg-gray-500' : 'bg-violet-400'}`} />
-                    <span className={`text-sm font-semibold ${categoryModal.category === cat ? 'text-gray-500' : 'text-white'}`}>{cat}</span>
+                    <div className={`w-2 h-2 rounded-full ${!categoryModal.category ? 'bg-gray-500' : 'bg-violet-400'}`} />
+                    <span className={`text-sm font-semibold ${!categoryModal.category ? 'text-gray-500' : 'text-white'}`}>Uncategorized</span>
                   </div>
-                  {categoryModal.category === cat && <span className="text-[9px] font-bold text-gray-600 uppercase">Current</span>}
+                  {!categoryModal.category && <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter">Current</span>}
                 </button>
-              ))}
 
-            </div>
+                {categories.map(cat => {
+                  const isCurrent = categoryModal.category === cat;
+                  return (
+                    <div key={cat} className="group relative w-full">
+                      {editingCategory === cat ? (
+                        <div className="flex items-center gap-1.5 w-full p-3 rounded-2xl border bg-white/[0.02] border-white/5">
+                          <input
+                            type="text"
+                            value={editCategoryValue}
+                            onChange={(e) => setEditCategoryValue(e.target.value)}
+                            className="flex-1 w-full min-w-0 bg-white/5 text-white text-xs font-medium rounded-xl px-3 py-2 focus:outline-none focus:ring-1 focus:ring-violet-500/50 border border-white/5"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') editCategoryGlobally(cat, editCategoryValue.trim());
+                              if (e.key === 'Escape') setEditingCategory(null);
+                            }}
+                          />
+                          <button
+                            onClick={() => editCategoryGlobally(cat, editCategoryValue.trim())}
+                            className="p-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white transition-all cursor-pointer flex-shrink-0"
+                            title="Save"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                          </button>
+                          <button
+                            onClick={() => setEditingCategory(null)}
+                            className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-all cursor-pointer flex-shrink-0"
+                            title="Cancel"
+                          >
+                            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => {
+                            if (!isCurrent) {
+                              changeCategoryForBook(categoryModal, cat);
+                            }
+                          }}
+                          className={`w-full flex items-center justify-between p-4 rounded-2xl border transition-all ${isCurrent
+                            ? 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                            : 'bg-white/[0.02] border-white/5 hover:border-violet-500/40 hover:bg-violet-500/5 cursor-pointer active:scale-[0.98]'
+                            }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-2 h-2 rounded-full ${isCurrent ? 'bg-gray-500' : 'bg-violet-400'}`} />
+                            <span className={`text-sm font-semibold ${isCurrent ? 'text-gray-500' : 'text-white'}`}>{cat}</span>
+                          </div>
 
-            {/* Create new category */}
-            <div className="mt-3 pt-3 border-t border-white/5">
-              {showNewCatInput ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={newCatInput}
-                    onChange={(e) => setNewCatInput(e.target.value)}
-                    placeholder="Category name..."
-                    className="flex-1 bg-white/5 text-white text-xs font-medium rounded-lg px-3 py-2.5 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-white/5 transition-all placeholder:text-white/20"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newCatInput.trim()) {
-                        changeCategoryForBook(categoryModal, newCatInput.trim());
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                      if (e.key === 'Escape') {
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                    }}
-                  />
+                          <div className="flex items-center gap-1">
+                            {isCurrent && <span className="text-[9px] font-bold text-gray-600 uppercase tracking-tighter mr-1 group-hover:hidden">Current</span>}
+
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditingCategory(cat); setEditCategoryValue(cat); }}
+                              className="p-1.5 rounded-lg hover:bg-blue-500/20 text-gray-400 hover:text-blue-400 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+                              title="Edit"
+                            >
+                              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /><path d="m15 5 4 4" /></svg>
+                            </button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); deleteCategoryGlobally(cat); }}
+                              className="p-1.5 rounded-lg hover:bg-red-500/20 text-gray-400 hover:text-red-400 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
+                              title="Delete"
+                            >
+                              <img src={TrashIcon} className="w-3.5 h-3.5 opacity-70" style={{ filter: 'brightness(0) invert(1)' }} />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Create new category */}
+              <div className="pt-1">
+                {showNewCatInput ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newCatInput}
+                      onChange={(e) => setNewCatInput(e.target.value)}
+                      placeholder="Category name..."
+                      className="flex-1 bg-white/5 text-white text-xs font-medium rounded-2xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-violet-500/50 border border-white/5 transition-all placeholder:text-white/20"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newCatInput.trim()) {
+                          changeCategoryForBook(categoryModal, newCatInput.trim());
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                        if (e.key === 'Escape') {
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                      }}
+                    />
+                    <button
+                      onClick={() => {
+                        if (newCatInput.trim()) {
+                          changeCategoryForBook(categoryModal, newCatInput.trim());
+                          setNewCatInput('');
+                          setShowNewCatInput(false);
+                        }
+                      }}
+                      disabled={!newCatInput.trim()}
+                      className="px-4 py-3.5 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      Add
+                    </button>
+                  </div>
+                ) : (
                   <button
-                    onClick={() => {
-                      if (newCatInput.trim()) {
-                        changeCategoryForBook(categoryModal, newCatInput.trim());
-                        setNewCatInput('');
-                        setShowNewCatInput(false);
-                      }
-                    }}
-                    disabled={!newCatInput.trim()}
-                    className="px-3 py-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed"
+                    onClick={() => setShowNewCatInput(true)}
+                    className="group flex items-center gap-3 p-4 rounded-2xl border border-dashed border-white/10 hover:border-violet-500/40 hover:bg-violet-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
                   >
-                    Add
+                    <div className="w-5 h-5 rounded-md bg-violet-500/20 flex items-center justify-center">
+                      <svg className="w-3 h-3 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
                   </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowNewCatInput(true)}
-                  className="group flex items-center gap-2.5 p-2.5 rounded-lg border border-dashed border-white/10 hover:border-violet-500/40 hover:bg-violet-500/5 transition-all cursor-pointer active:scale-[0.98] w-full"
-                >
-                  <div className="w-5 h-5 rounded-md bg-violet-500/20 flex items-center justify-center">
-                    <svg className="w-3 h-3 text-violet-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-                  </div>
-                  <span className="text-sm font-semibold text-gray-400 group-hover:text-white transition-colors">New Category</span>
-                </button>
-              )}
+                )}
+              </div>
             </div>
 
-            <div className="mt-4">
+            <div className="mt-8">
               <button
-                onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); }}
-                className="w-full py-3 bg-white/5 hover:bg-white/10 rounded-xl text-xs font-semibold text-gray-500 cursor-pointer transition-all active:scale-95"
+                onClick={() => { setCategoryModal(null); setShowNewCatInput(false); setNewCatInput(''); setEditingCategory(null); }}
+                className="w-full py-4 bg-white/5 hover:bg-white/10 rounded-2xl text-sm font-semibold text-gray-400 cursor-pointer transition-all active:scale-95"
               >
                 Cancel
               </button>
