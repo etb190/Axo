@@ -9,7 +9,7 @@ import {
     Check
 } from 'lucide-react';
 import Navbar from './Navbar';
-import { useAppNow, getClockMode, setClockMode, CLOCK_MODES } from '../utils/appClock';
+import { useAppNow, getClockMode, setClockMode, CLOCK_MODES, getClockStatus } from '../utils/appClock';
 
 // --- ELECTRON / NODE.JS IMPORTS ---
 // (Imports removed as data is now provided by context)
@@ -75,7 +75,6 @@ const Home = () => {
     const [greeting, setGreeting] = useState('');
     const [clockOpen, setClockOpen] = useState(false);
     const [clockMode, setClockModeState] = useState(() => getClockMode());
-
     // --- CORRECTED APP CLOCK ---
     // `now` follows the user-selected clock mode (see the popover next to the
     // header time). Fixes the "app is one hour ahead" issue caused by the OS
@@ -118,6 +117,22 @@ const Home = () => {
     };
 
     const age = getAge(currentTime);
+
+    // Live diagnostic for the clock popover (recomputed every tick — cheap,
+    // the shift itself is cached for 30s inside appClock).
+    const clockStatus = getClockStatus(currentTime);
+    const clockStatusLine = (() => {
+        const s = clockStatus;
+        const sign = s.shiftMinutes > 0 ? '+' : '';
+        if (s.mode === 'auto') {
+            if (s.targetLabel) {
+                return `Auto · ${s.osZone} → ${s.targetLabel} · applied ${sign}${s.shiftMinutes} min vs Windows clock`;
+            }
+            return `Auto · ${s.osZone || 'unknown zone'} · following system clock`;
+        }
+        if (s.mode === 'system') return 'System · raw OS clock, no correction';
+        return `Manual mode · applied ${sign}${s.shiftMinutes} min vs system`;
+    })();
 
     // --- RENDER HELPERS ---
     const formatCurrency = (val) => (
@@ -177,12 +192,16 @@ const Home = () => {
                                                 <Globe size={13} className="text-emerald-500" />
                                                 <h4 className="text-[11px] font-bold uppercase tracking-widest text-white">Clock</h4>
                                             </div>
-                                            <p className="text-[10px] leading-relaxed text-neutral-500 mb-3">
-                                                Heads up: Morocco returned to GMT+0 on 20 Sep 2026 after 8 years
-                                                on GMT+1 — old time-zone data (like the one bundled in this app)
-                                                still uses GMT+1, which makes the clock run an hour ahead. Pick
-                                                the time your other devices show and Axo will apply it instantly,
-                                                everywhere.
+                                            <p className="text-[10px] leading-relaxed text-neutral-500 mb-2">
+                                                Clock running an hour ahead? Windows' time-zone data for
+                                                Casablanca is often stale — it still uses the old GMT+1 rule,
+                                                even though Morocco moved to GMT+0 on 20 Sep 2026. <span
+                                                className="text-neutral-300 font-semibold">Auto (on by default)</span> already
+                                                corrects this. If the time still looks wrong, pick what your
+                                                other devices show and Axo applies it instantly, everywhere.
+                                            </p>
+                                            <p className="text-[9px] leading-snug font-mono text-neutral-400 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 mb-3">
+                                                {clockStatusLine}
                                             </p>
                                             <div className="space-y-1">
                                                 {CLOCK_MODES.map((m) => (
