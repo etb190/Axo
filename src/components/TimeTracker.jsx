@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom';
 import { v4 as uuidv4 } from 'uuid';
 import { useNavigate } from 'react-router-dom';
 import '../assets/styles/timetracker.css'
+import { getNow, toAppTime } from '../utils/appClock';
 
 
 
@@ -367,7 +368,7 @@ function Timetracker() {
         return `${hours}:${minutes}`;
     }
 
-    const displayTime = `${setElapsedTime(startTime)} - ${setElapsedTime(running ? new Date() : endTime)}`
+    const displayTime = `${setElapsedTime(toAppTime(startTime))} - ${setElapsedTime(running ? getNow() : toAppTime(endTime))}`
 
 
     // Open and close view added task modal
@@ -619,9 +620,11 @@ function Timetracker() {
     const diffColor = diffToday >= 0 ? 'text-green-500' : 'text-red-500'
 
     const handleDay = (direction) => {
-        const date = new Date(displayByDay)
+        // Anchor at midday so day arithmetic is safe in any timezone
+        // (previously toISOString() could land on the wrong day at UTC boundaries)
+        const date = new Date(`${displayByDay}T12:00:00`);
         date.setDate(date.getDate() + direction)
-        setDisplayByDay(date.toISOString().split('T')[0])
+        setDisplayByDay(getYMD(date))
     }
 
     const handleJournalClick = async () => {
@@ -1324,7 +1327,7 @@ function Timetracker() {
                                                 {session.taskName}
                                             </span>
                                             <span className={`text-[10px] font-mono tabular-nums ${session.taskName == selectedTask && session.stopTime == null ? 'text-neutral-700' : 'text-neutral-500'}`}>
-                                                {setElapsedTime(new Date(session.startTime))} - {session.stopTime == null && session.taskName == selectedTask ? setElapsedTime(new Date()) : setElapsedTime(new Date(session.stopTime))}
+                                                {setElapsedTime(toAppTime(new Date(session.startTime)))} - {session.stopTime == null && session.taskName == selectedTask ? setElapsedTime(getNow()) : setElapsedTime(toAppTime(new Date(session.stopTime)))}
                                             </span>
                                         </div>
                                         <div className={`text-xs font-mono font-bold tabular-nums ${session.taskName == selectedTask && session.stopTime == null ? 'text-black' : 'text-neutral-400'}`}>

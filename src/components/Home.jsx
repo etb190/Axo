@@ -5,9 +5,11 @@ import { useData } from '../contexts/DataContext';
 import {
     Wallet, Calendar, BookOpen, Clock, Brain, Globe,
     Target, CheckSquare, Music, List, Play, Pause,
-    SkipBack, SkipForward, Book, ArrowUpRight, ArrowDownRight
+    SkipBack, SkipForward, Book, ArrowUpRight, ArrowDownRight,
+    Check
 } from 'lucide-react';
 import Navbar from './Navbar';
+import { useAppNow, getClockMode, setClockMode, CLOCK_MODES } from '../utils/appClock';
 
 // --- ELECTRON / NODE.JS IMPORTS ---
 // (Imports removed as data is now provided by context)
@@ -71,29 +73,26 @@ const Home = () => {
     const { data } = useData();
 
     const [greeting, setGreeting] = useState('');
-    const [currentTime, setCurrentTime] = useState(new Date());
+    const [clockOpen, setClockOpen] = useState(false);
+    const [clockMode, setClockModeState] = useState(() => getClockMode());
 
+    // --- CORRECTED APP CLOCK ---
+    // `now` follows the user-selected clock mode (see the popover next to the
+    // header time). Fixes the "app is one hour ahead" issue caused by the OS
+    // reporting the wrong timezone. Falls back to plain system time by default.
+    const currentTime = useAppNow(1000);
 
-    // --- DATA FETCHING ---
+    // --- GREETING ---
     useEffect(() => {
         const calculateGreeting = () => {
-            const hour = new Date().getHours();
+            const hour = currentTime.getHours();
             if (hour >= 5 && hour < 12) setGreeting('Good Morning');
             else if (hour >= 12 && hour < 17) setGreeting('Good Afternoon');
             else if (hour >= 17 && hour < 22) setGreeting('Good Evening');
             else setGreeting('Late Night');
         };
         calculateGreeting();
-
-        const timer = setInterval(() => {
-            const now = new Date();
-            setCurrentTime(now);
-        }, 1000); // 1s clock update
-
-        return () => {
-            clearInterval(timer);
-        };
-    }, []);
+    }, [currentTime]);
 
     // --- AGE CALCULATION ---
     const birthDate = new Date('2003-09-14T00:00:00');
@@ -156,8 +155,60 @@ const Home = () => {
                             <Calendar size={14} />
                             {formatDate(currentTime)}
                             <span className="w-1 h-1 bg-neutral-700 rounded-full mx-1"></span>
-                            <Clock size={14} />
-                            {formatTime(currentTime)}
+                            <span className="relative flex items-center">
+                                <button
+                                    onClick={() => setClockOpen(o => !o)}
+                                    title="Clock settings — fix timezone offset"
+                                    className="flex items-center gap-2 hover:text-white transition-colors cursor-pointer"
+                                >
+                                    <Clock size={14} />
+                                    {formatTime(currentTime)}
+                                </button>
+
+                                {clockOpen && (
+                                    <>
+                                        {/* click-away layer */}
+                                        <div
+                                            className="fixed inset-0 z-[120] cursor-default"
+                                            onClick={() => setClockOpen(false)}
+                                        />
+                                        <div className="absolute left-0 top-7 z-[130] w-80 bg-[#0a0a0a] border border-white/10 rounded-xl shadow-2xl p-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <Globe size={13} className="text-emerald-500" />
+                                                <h4 className="text-[11px] font-bold uppercase tracking-widest text-white">Clock</h4>
+                                            </div>
+                                            <p className="text-[10px] leading-relaxed text-neutral-500 mb-3">
+                                                Heads up: Morocco returned to GMT+0 on 20 Sep 2026 after 8 years
+                                                on GMT+1 — old time-zone data (like the one bundled in this app)
+                                                still uses GMT+1, which makes the clock run an hour ahead. Pick
+                                                the time your other devices show and Axo will apply it instantly,
+                                                everywhere.
+                                            </p>
+                                            <div className="space-y-1">
+                                                {CLOCK_MODES.map((m) => (
+                                                    <button
+                                                        key={m.id}
+                                                        onClick={() => {
+                                                            setClockMode(m.id);
+                                                            setClockModeState(m.id);
+                                                            setClockOpen(false);
+                                                        }}
+                                                        className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-left transition-colors cursor-pointer ${clockMode === m.id
+                                                            ? 'bg-emerald-500/10 border border-emerald-500/30'
+                                                            : 'hover:bg-white/5 border border-transparent'}`}
+                                                    >
+                                                        <span>
+                                                            <span className={`block text-xs font-bold ${clockMode === m.id ? 'text-emerald-400' : 'text-neutral-200'}`}>{m.label}</span>
+                                                            <span className="block text-[9px] text-neutral-500 font-mono">{m.hint}</span>
+                                                        </span>
+                                                        {clockMode === m.id && <Check size={13} className="text-emerald-400" />}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </>
+                                )}
+                            </span>
                             <span className="w-1 h-1 bg-neutral-700 rounded-full mx-1"></span>
                             <Brain size={14} className="text-emerald-500/50" />
                             <span className="text-emerald-500 font-bold">

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, nativeImage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { exec } from 'node:child_process';
 import started from 'electron-squirrel-startup';
 import { startBridgeServer, stopBridgeServer, saveConfig } from './services/extensionBridgeServer.js';
 import { startAndroidBridgeServer, stopAndroidBridgeServer } from './services/androidBridgeServer.js';
@@ -10,6 +11,70 @@ import { discordRpc } from './services/discordRpc.js';
 if (started) {
   app.quit();
 }
+
+// ---------------------------------------------------------------------------
+// Timezone watcher
+//
+// Electron/Chromium reads the OS timezone ONCE at process startup and never
+// refreshes it. If Windows changes its timezone while Axo is running (e.g.
+// "Set time zone automatically" corrects itself, a Windows update changes the
+// DST rule, or the PC's zone was fixed later), the app keeps showing the old,
+// stale offset — typically making every clock in the app look 1 hour off.
+//
+// We poll the effective Windows timezone (registry: ActiveTimeBias +
+// TimeZoneKeyName). When it changes we relaunch the app so Chromium picks up
+// the fresh zone. Ongoing TimeTracker sessions are persisted to disk and are
+// automatically resumed on relaunch, so this is safe.
+// ---------------------------------------------------------------------------
+let tzBaseline = null;
+let tzWatcherInterval = null;
+let tzRestartPending = false;
+
+const readWindowsTimezone = () => new Promise((resolve) => {
+  if (process.platform !== 'win32') return resolve(null);
+  const key = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation';
+  exec(`reg query "${key}" /v ActiveTimeBias`, (err1, out1) => {
+    if (err1) return resolve(null);
+    const biasMatch = /ActiveTimeBias\s+REG_DWORD\s+0x([0-9a-f]+)/i.exec(out1 || '');
+    if (!biasMatch) return resolve(null);
+    exec(`reg query "${key}" /v TimeZoneKeyName`, (err2, out2) => {
+      const nameMatch = err2 ? null : /TimeZoneKeyName\s+REG_SZ\s+(.*)/i.exec(out2 || '');
+      resolve({
+        bias: parseInt(biasMatch[1], 16), // minutes west of UTC (incl. DST)
+        name: nameMatch ? nameMatch[1].trim() : '',
+      });
+    });
+  });
+});
+
+const startTimezoneWatcher = async () => {
+  tzBaseline = await readWindowsTimezone();
+  if (!tzBaseline) return; // non-Windows or registry unavailable
+
+  tzWatcherInterval = setInterval(async () => {
+    if (tzRestartPending) return;
+    const current = await readWindowsTimezone();
+    if (!current) return;
+    if (current.bias !== tzBaseline.bias || current.name !== tzBaseline.name) {
+      tzRestartPending = true;
+      clearInterval(tzWatcherInterval);
+      tzWatcherInterval = null;
+      console.log('[TimezoneWatcher] OS timezone changed:', tzBaseline, '->', current);
+      try {
+        await dialog.showMessageBox(mainWindow, {
+          type: 'info',
+          title: 'Timezone changed',
+          message: 'Windows timezone changed — Axo will restart to show the correct time.',
+          detail: `Was: ${tzBaseline.name || tzBaseline.bias}. Now: ${current.name || current.bias}.\nAny running timer will be resumed automatically.`,
+          buttons: ['Restart now'],
+          noLink: true,
+        });
+      } catch { /* window may be closed — still relaunch */ }
+      app.relaunch();
+      app.exit(0);
+    }
+  }, 60000);
+};
 
 let mainWindow;
 
@@ -174,6 +239,7 @@ app.whenReady().then(() => {
   createWindow();
   startBridgeServer(mainWindow);
   startAndroidBridgeServer();
+  startTimezoneWatcher();
 
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
@@ -190,6 +256,10 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   stopBridgeServer();
   stopAndroidBridgeServer();
+  if (tzWatcherInterval) {
+    clearInterval(tzWatcherInterval);
+    tzWatcherInterval = null;
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

@@ -9,6 +9,7 @@ import plusIcon from '../assets/icons/plus.svg';
 import calendarIcon from '../assets/icons/calendar.svg';
 import clockIcon from '../assets/icons/clock.svg';
 import TaskDetailer from './TaskDetailer';
+import { getNow, toAppTime } from '../utils/appClock';
 
 const LocalIcon = ({ src, size = 16, className = '' }) => (
   <div
@@ -48,7 +49,7 @@ const COLORS = [
 ];
 
 const DayPlanner = () => {
-  const [currentHour, setCurrentHour] = useState(new Date().getHours());
+  const [currentHour, setCurrentHour] = useState(() => getNow().getHours());
   const [events, setEvents] = useState([]);
   const [savedTasks, setSavedTasks] = useState([]);
   const [showEventModal, setShowEventModal] = useState(false);
@@ -73,7 +74,7 @@ const DayPlanner = () => {
   const [showClearDayModal, setShowClearDayModal] = useState(false);
   const [dayToClear, setDayToClear] = useState(null);
   const [selectedDuration, setSelectedDuration] = useState('0.5');
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const [currentTime, setCurrentTime] = useState(() => getNow());
   const [activeWorkSession, setActiveWorkSession] = useState(null);
   const [viewMode, setViewMode] = useState(() => {
     try { return localStorage.getItem('axo_dayplanner_viewMode') || 'plan'; } catch { return 'plan'; }
@@ -101,8 +102,8 @@ const DayPlanner = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentHour(new Date().getHours());
-      setCurrentTime(new Date());
+      setCurrentHour(getNow().getHours());
+      setCurrentTime(getNow());
     }, 1000); // Update every second for countdown
     return () => clearInterval(interval);
   }, []);
@@ -206,7 +207,7 @@ const DayPlanner = () => {
   const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
   const getCurrentWeekDates = () => {
-    const now = new Date();
+    const now = getNow();
     // If it's before 5 AM, use yesterday's date to determine the week
     const effectiveNow = now.getHours() < 5 ? new Date(now.getTime() - 24 * 60 * 60 * 1000) : now;
     const currentDay = effectiveNow.getDay();
@@ -226,7 +227,7 @@ const DayPlanner = () => {
 
   const weekDates = getCurrentWeekDates();
   const getEffectiveDayIndex = () => {
-    const now = new Date();
+    const now = getNow();
     const day = now.getDay() === 0 ? 6 : now.getDay() - 1;
     return now.getHours() < 5 ? (day - 1 + 7) % 7 : day;
   };
@@ -258,8 +259,8 @@ const DayPlanner = () => {
 
     sessions.forEach(session => {
       if (!session.startTime || !session.stopTime) return;
-      const start = new Date(session.startTime);
-      const stop = new Date(session.stopTime);
+      const start = toAppTime(new Date(session.startTime));
+      const stop = toAppTime(new Date(session.stopTime));
 
       // Filter to current week
       if (stop < mondayStart || start > sundayEnd) return;
@@ -766,7 +767,7 @@ const DayPlanner = () => {
   };
 
   const calculateScheduledHours = () => {
-    const now = new Date();
+    const now = getNow();
     const currentDayIndex = now.getHours() < 5
       ? (now.getDay() === 0 ? 5 : (now.getDay() === 1 ? 6 : now.getDay() - 2))
       : (now.getDay() === 0 ? 6 : now.getDay() - 1);
@@ -785,7 +786,7 @@ const DayPlanner = () => {
   };
 
   const getCurrentAndNextTask = () => {
-    const now = new Date();
+    const now = getNow();
     let currentDayIndex = now.getDay() === 0 ? 6 : now.getDay() - 1;
     let currentMinutes = now.getHours() * 60 + now.getMinutes();
     let accurateMinutes = currentMinutes + now.getSeconds() / 60;
